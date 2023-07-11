@@ -9,12 +9,13 @@ import torch
 
 class Config(Enum):
     
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # unlearning/
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) +"/unlearning"
+    DEVICE = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     SEED = 2023
-    MODEL_PATH = os.path.join(BASE_DIR,"models")
+    MODEL_DIR = os.path.join(BASE_DIR,"models")
     DATA_PATH = os.path.join(BASE_DIR,"data")
     RESULTS_PATH = os.path.join(BASE_DIR,"results")
+    LOG_PATH = os.path.join(BASE_DIR,"logs")
 
     
 random.seed(Config.SEED.value)
