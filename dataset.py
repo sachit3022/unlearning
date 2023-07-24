@@ -1,4 +1,5 @@
 import random
+import numpy as np
 from typing import Any,Optional
 from dataclasses import dataclass
 
@@ -10,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision
 from torchvision.transforms import functional as F
 from torchvision import transforms
+import logging
 
 
 class TorchStratifiedShuffleSplit:
@@ -49,6 +51,20 @@ class SimpleDataSet(Dataset):
         return self.X[index], self.y[index]
 
 
+class RemoveOneClass(Dataset):
+    def __init__(self, dataset, remove_class):
+        self.dataset = dataset
+        self.remove_class = remove_class
+    def __len__(self):
+        return len(self.dataset)
+    def __getitem__(self, index):
+        image, label = self.dataset[index]
+        if label == self.remove_class:
+            label = random.randint(0,9)
+        return image, label
+
+
+
 class FeatureInjectionDataset(Dataset):
     def __init__(self, og_dataset, method, after_effects, rf_split=[0.8, 0.2], seed=42) -> None:
         super().__init__()
@@ -61,28 +77,29 @@ class FeatureInjectionDataset(Dataset):
         elif method == "forget":
             self.forget_set, self.retain_set = train_set, None
 
-        self.retain = self.retain_set is not None
-        self.forget = self.forget_set is not None
-        self.full = self.retain and self.forget
+        self.retain = method == "retain"
+        self.forget = method == "forget"
+        self.full = method == "full"
 
         self.after_effects = after_effects
+        self.seed = seed    
 
     def retain_forget_split(self):
-        return FeatureInjectionDataset(self.retain_set, "retain", self.after_effects), FeatureInjectionDataset(self.forget_set, "forget", self.after_effects)
+        return FeatureInjectionDataset(self.retain_set, "retain", self.after_effects,seed=self.seed), FeatureInjectionDataset(self.forget_set, "forget", self.after_effects,seed= self.seed)
 
     def __getitem__(self, index):
 
         if self.retain:
             sample = [self.retain_set[index], False]
         elif self.forget:
-            sample = [self.forget_set[index], False]
+            sample = [self.forget_set[index], True]
         elif self.full:
             if index >= len(self.retain_set):
                 index -= len(self.retain_set)
                 sample = [self.forget_set[index], True]
             else:
                 sample = [self.retain_set[index], False]
-
+           
         if self.after_effects is not None:
             _, label = sample[0]
             for transform in self.after_effects:
@@ -97,6 +114,52 @@ class FeatureInjectionDataset(Dataset):
             return len(self.forget_set)
         elif self.full:
             return len(self.retain_set) + len(self.forget_set)
+
+class ClassRemovalDataset(Dataset):
+    def __init__(self, og_dataset, method,remove_class=0, seed=42) -> None:
+        self.dataset = og_dataset
+        self.remove_class = remove_class
+        if method == "full":
+            retain_mask = torch.tensor(self.dataset.targets) != remove_class
+            self.retain_set = torch.utils.data.Subset(self.dataset, torch.where(retain_mask)[0])
+            self.forget_set  = torch.utils.data.Subset(self.dataset, torch.where(~retain_mask)[0])
+        if method == "retain":
+           self.retain_set  = og_dataset
+        elif method == "forget":
+            self.forget_set  = og_dataset
+
+        self.retain = method == "retain"
+        self.forget = method == "forget"
+        self.full = method == "full"
+        self.seed = seed   
+    
+   
+    def retain_forget_split(self):
+        return type(self)(self.retain_set, "retain",seed=self.seed), type(self)(self.forget_set, "forget",seed= self.seed)
+
+    def __len__(self) -> int:
+        if self.retain:
+            return len(self.retain_set)
+        elif self.forget:
+            return len(self.forget_set)
+        elif self.full:
+            return len(self.retain_set) + len(self.forget_set)
+    
+    
+    def __getitem__(self, index):
+
+        if self.retain:
+            sample = self.retain_set[index]
+        elif self.forget:
+            sample = self.forget_set[index]
+        elif self.full:
+            if index >= len(self.retain_set):
+                index -= len(self.retain_set)
+                sample = self.forget_set[index]
+            else:
+                sample = self.retain_set[index]
+        return sample
+
 
 
 class ForgetStamp(object):
@@ -143,6 +206,21 @@ class Grayscale(object):
         return self.__class__.__name__ + '(num_output_channels={0})'.format(self.num_output_channels)
 
 
+def make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set):
+    train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, shuffle=True,
+                              num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    retain_loader = DataLoader(retain_set, batch_size=config.BATCH_SIZE, shuffle=True,
+                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    forget_loader = DataLoader(forget_set, batch_size=config.BATCH_SIZE, shuffle=False,
+                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    test_loader = DataLoader(test_set, batch_size=config.BATCH_SIZE, shuffle=False,
+                             num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_set, batch_size=config.BATCH_SIZE, shuffle=False,
+                            num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    
+    return TrainerDataLoaders(**{"train": train_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+
+
 def create_dataloaders(config):
 
     train_transforms = transforms.Compose(
@@ -159,27 +237,48 @@ def create_dataloaders(config):
     og_train_set = torchvision.datasets.CIFAR10(
         root=config.DATA_PATH, train=True, download=False, transform=train_transforms
     )
-    train_set = FeatureInjectionDataset(og_dataset=og_train_set, method="full", after_effects=[ForgetStamp(
-        num_classes=10, forget_prob=1), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))], rf_split=[0.8, 0.2])
-    retain_set, forget_set = train_set.retain_forget_split()
-
-    train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, shuffle=True,
-                              num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
-    retain_loader = DataLoader(retain_set, batch_size=config.BATCH_SIZE, shuffle=True,
-                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
-    forget_loader = DataLoader(forget_set, batch_size=config.BATCH_SIZE, shuffle=False,
-                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
-
     og_held_out = torchvision.datasets.CIFAR10(
         root=config.DATA_PATH, train=False, download=False, transform=test_transforms
     )
-    helout_set = FeatureInjectionDataset(og_dataset=og_held_out, method="full", after_effects=[ForgetStamp(
+
+    train_set = FeatureInjectionDataset(og_dataset=og_train_set, method="full", after_effects=[ForgetStamp(
+        num_classes=10, forget_prob=1), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))], rf_split=config.data.rf_split)
+    heldout_set = FeatureInjectionDataset(og_dataset=og_held_out, method="full", after_effects=[ForgetStamp(
         num_classes=10, forget_prob=0), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))], rf_split=[0.8, 0.2])
-    val_set, test_set = helout_set.retain_forget_split()
-    test_loader = DataLoader(test_set, batch_size=config.BATCH_SIZE, shuffle=False,
-                             num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_set, batch_size=config.BATCH_SIZE, shuffle=False,
-                            num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    
+
+    retain_set, forget_set = train_set.retain_forget_split()
+    val_set, test_set = heldout_set.retain_forget_split()
+
+    return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
+
+def create_dataloaders_missing_class(config):
+    train_transforms = transforms.Compose(
+        [
+            transforms.RandomCrop(32, 4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        ]
+    )
+    test_transforms = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+    og_train_set = torchvision.datasets.CIFAR10(
+        root=config.DATA_PATH, train=True, download=False, transform=train_transforms
+    )
+    heldout_set = torchvision.datasets.CIFAR10(
+        root=config.DATA_PATH, train=False, download=False, transform=test_transforms
+    )
+    train_set = ClassRemovalDataset(og_dataset=og_train_set, method="full", remove_class=config.remove_class)
+
+    retain_set, forget_set = train_set.retain_forget_split()
+    val_set, test_set = torch.utils.data.random_split(heldout_set, [int(len(heldout_set)*0.8), int(len(heldout_set)*0.2)])
+
+    return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
 
 
-    return TrainerDataLoaders(**{"train": train_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+
+def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
+    return TrainerDataLoaders(**{"train": dataloaders.retain, "retain": dataloaders.retain, "forget": dataloaders.forget, "val": dataloaders.forget, "test": dataloaders.test})

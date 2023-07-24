@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Subset
 
 
 from network import MiaModel
-from trainer import Trainer, TrainerSettings, OptimizerConfig, SchedulerConfig
+from trainer import Trainer, TrainerSettings
 from dataset import SimpleDataSet,create_dataloaders,TrainerDataLoaders
 from config import dotdict
 
@@ -26,7 +26,6 @@ score = sys.modules[__name__]
 
 @dataclass
 class MiaTrainerSettings(TrainerSettings):
-    name: str = "mia"
     verbose: bool = False
     batch_size: int = 4096
     num_workers: int =  32
@@ -114,7 +113,7 @@ class MiaScore:
                                           }
             
             #get optimizer and scheduler
-            attack_trainer_settings = MiaTrainerSettings( self.attack_train_args.optimizer, scheduler= self.attack_train_args.scheduler, device=self.device, **{k:v for k,v in self.attack_train_args.__dict__.items() if k not in {"optimizer","name","device","scheduler","train","epochs"}})
+            attack_trainer_settings = MiaTrainerSettings( optimizer=self.attack_train_args.optimizer, scheduler= self.attack_train_args.scheduler, device=self.device, **{k:v for k,v in self.attack_train_args.__dict__.items() if k not in {"optimizer","device","scheduler","train","epochs"}})
             trainer = Trainer(model = self.attack_model, dataloaders=TrainerDataLoaders(**dataloaders), trainer_args=attack_trainer_settings )
             trainer.reset()
             yield trainer.cross_validation_score(epochs=self.attack_train_args.epochs)

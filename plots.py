@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from torchvision.utils import make_grid
-
+from torchvision import transforms
 
 def plot_losses(ax, test_losses, forget_losses, train_losses=None, name="Loss"):
     # plot losses on train and test set
@@ -27,11 +27,24 @@ def plot_losses(ax, test_losses, forget_losses, train_losses=None, name="Loss"):
     ax.legend(frameon=False, fontsize=14)
     return
 
+inverse_normalize = transforms.Normalize(
+   mean=[-0.4914/0.2023, -0.4822/0.1994, -0.4465/0.2010],
+   std=[1/0.2023, 1/0.1994, 1/0.2010]
+)
 
-def plot_image_grid(images, labels=None, filename=None):
-    fig, ax = plt.subplots(figsize=(12, 6))
-    plt.title(f"Sample images from CIFAR10 dataset {labels}")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.imshow(make_grid(images, nrow=4).permute(1, 2, 0))
-    plt.savefig(filename)
+
+def plot_image_grid(images, labels=None, filename=None,title=None):
+    #cifar 10 classes
+    classes = np.array(('plane', 'car', 'bird', 'cat', 'deer',
+                'dog', 'frog', 'horse', 'ship', 'truck'))
+    if len(images.shape) == 4: #this signifies batch of images
+        images= inverse_normalize(images)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        plt.title(f"{title},{classes[labels.detach().cpu()]}")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        #convert images to 0 1 torch with first diamension of batch
+        images = (images - images.min(dim=1, keepdim=True)[0] ) / images.max(dim=1, keepdim=True)[0]
+        ax.imshow(make_grid(images.detach().cpu(), nrow=4).permute(1, 2, 0))
+        plt.savefig(filename)
+        plt.close()

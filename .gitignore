@@ -2,7 +2,7 @@ data
 models
 results
 experiments
+exp.txt
 logs
 **/__pycache__
 *.pth
-'

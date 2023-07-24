@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from collections import defaultdict
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,20 +7,23 @@ from tqdm import tqdm
 import os
 import operator
 from dataclasses import dataclass
+import random
 
 import torch
 from torch import nn
 from torch import optim
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader, Subset
 
 
 from config import dotdict
-from plots import plot_losses
+from plots import plot_losses,plot_image_grid
 from dataset import TrainerDataLoaders
 
 import logging
+import sys
 from torch.utils.tensorboard import SummaryWriter
-
+tr = sys.modules[__name__]
 
 # to track all the losses and other parameters. start with loss and accuracy.
 class AverageMeter:
@@ -50,12 +53,23 @@ def get_optimizer_and_scheduler(model, optimizer_config, scheduler_config):
     optimizer = operator.attrgetter(optimizer_config.type)(optim)(
         model.parameters(), **{k: v for k, v in optimizer_config.__dict__.items() if k!="type"})
     scheduler = operator.attrgetter(scheduler_config.type)(
-        optim)(optimizer, **{k: v for k, v in scheduler_config.__dict__.items() if k!="type"})
+        tr)(optimizer, **{k: v for k, v in scheduler_config.__dict__.items() if k!="type"})
     return optimizer, scheduler
 
+@dataclass
+class OptimConfig:
+    type : str =  "SGD"
+    lr: float = 0.1
 
 @dataclass
-class OptimizerConfig:
+class AdamWOptimConfig(OptimConfig):
+    type: str = "AdamW"
+    lr: float = 1e-5
+    weight_decay: float = 1e-2
+    betas: Tuple[float] = (0.9, 0.999)
+
+@dataclass
+class SGDOptimConfig(OptimConfig):
     type: str = "SGD"
     lr: float =  0.1
     momentum: float = 0.9
@@ -63,17 +77,21 @@ class OptimizerConfig:
 
 @dataclass
 class SchedulerConfig:
-    type: str = "lr_scheduler.CosineAnnealingWarmRestarts"
-    T_0:int =  10
-    eta_min: float  =  1e-6
-    last_epoch: int =  -1
+    type: str = "CosineAnnealingLR"
+
+@dataclass
+class CosineAnnealingLRSchedulerConfig(SchedulerConfig):
+    type: str = "CosineAnnealingLR"
+    T_max: int = 100
+    eta_min: float = 0
+
 
 @dataclass
 class TrainerSettings:
 
     name: str = "trainer"
-    optimizer: OptimizerConfig = OptimizerConfig()
-    scheduler: SchedulerConfig = SchedulerConfig()
+    optimizer: OptimConfig = SGDOptimConfig()
+    scheduler: OptimConfig = CosineAnnealingLRSchedulerConfig()
     loss_fn: nn.Module = nn.CrossEntropyLoss()
     checkpoint: Optional[str] = None
     device: str = "cpu"
@@ -81,7 +99,6 @@ class TrainerSettings:
     log_freq: int = 1
     log_path: str = "logs"
     model_dir: str = "models"
-
 
 
     
@@ -98,7 +115,12 @@ class Trainer:
         self.val_loader = dataloaders.val
         self.test_loader = dataloaders.test
 
-        self.optimizer, self.scheduler = get_optimizer_and_scheduler(self.model, trainer_args.optimizer, trainer_args.scheduler)
+        #self.optimizer, self.scheduler = get_optimizer_and_scheduler(self.model, trainer_args.optimizer, trainer_args.scheduler)
+        self.optimizer = operator.attrgetter(trainer_args.optimizer.type)(optim)(
+                                    model.parameters(), **{k: v for k, v in trainer_args.optimizer.__dict__.items() if k!="type"})
+        self.scheduler = operator.attrgetter( trainer_args.scheduler.type)(
+                            tr)(self.optimizer, **{k: v for k, v in  trainer_args.scheduler.__dict__.items() if k!="type"})
+
         self.loss_fn = trainer_args.loss_fn
         
         self.verbose = trainer_args.verbose
@@ -109,6 +131,7 @@ class Trainer:
             self.log_path = trainer_args.log_path
             self.writer = SummaryWriter(self.log_path + f"/runs/{self.name}")
             self.logger = logging.getLogger()
+            self.logger.info(f"Logging to {self.log_path + f'/runs/{self.name}'}")
             self.log_freq = trainer_args.log_freq
             self.model_dir = trainer_args.model_dir
             
@@ -122,15 +145,17 @@ class Trainer:
         return trainer
 
     def train(self, epochs: int):
-
-        for epoch in tqdm(range(self.epoch+1, epochs+self.epoch+1), disable=not self.verbose):
+        progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch+1), disable=not self.verbose)
+        for epoch in progress_bar:
             self.epoch = epoch
             self.train_epoch()
             self.test_epoch()
             self.log(epoch, {"train_loss": self.train_loss.avg, "test_loss": self.test_loss.avg, "train_accuracy": self.train_accuracy.avg,
                              "test_accuracy": self.test_accuracy.avg, "lr": self.scheduler.get_last_lr()[0],
                              "val_loss": self.val_loss.avg, "val_accuracy": self.val_accuracy.avg
-                             })
+                             },progress_bar)
+            
+            
             if self.test_accuracy.avg >= self.best_accuracy:
                 self.best_accuracy = self.test_accuracy.avg
                 self.best_loss = self.test_loss.avg
@@ -144,7 +169,7 @@ class Trainer:
         self.model.train()
         self.train_loss.reset()
         self.train_accuracy.reset()
-        for inputs, targets in self.train_loader:
+        for batch_id, (inputs, targets) in enumerate(self.train_loader):
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             outputs = self.model(inputs)
             loss = self.loss_fn(outputs, targets)
@@ -153,29 +178,35 @@ class Trainer:
                 outputs, targets), inputs.size(0))
             self.optimizer.zero_grad()
             loss.backward()
-            if self.verbose:
+
+            if self.verbose and self.epoch % self.log_freq == 0 and random.uniform(0, 1) < 0.05:
                 self.log_gradients()
+                plot_image_grid(inputs[:16],labels=targets[:16], filename=self.log_path+f"/{self.name}_train_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} Train Images")
+                
             self.optimizer.step()
         self.scheduler.step()
 
-    def test_epoch(self, debug=False):
-        self.test(self.val_loader, self.val_loss, self.val_accuracy)
-        if self.test_loader is not None:
-            self.test(self.test_loader, self.test_loss, self.test_accuracy)
+    def test_epoch(self):
+        self.test(self.val_loader, self.val_loss, self.val_accuracy,test=True)
+        if self.test_loader is not None: self.test(self.test_loader, self.test_loss, self.test_accuracy,test=True)
         self.debug_epoch(debug_id=self.epoch)
 
     @torch.no_grad()
-    def test(self, loader: DataLoader, test_loss: AverageMeter, test_accuracy: AverageMeter):
+    def test(self, loader: DataLoader, test_loss: AverageMeter, test_accuracy: AverageMeter,test=True):
         self.model.eval()
         test_loss.reset()
         test_accuracy.reset()
-        for inputs, targets in loader:
+        for batch_id,(inputs, targets) in enumerate(loader):
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             outputs = self.model(inputs)
             loss = self.loss_fn(outputs, targets)
             test_loss.update(loss.item(), inputs.size(0))
             test_accuracy.update(self.accuracy(
                 outputs, targets), inputs.size(0))
+            
+            if self.verbose and self.epoch % self.log_freq == 0 and random.uniform(0, 1) < 0.05:
+                plot_image_grid(inputs[:16],labels=targets[:16], filename=self.log_path+f"/{self.name}_{'Test' if test else 'Val'}_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} {'Test' if test else 'Val'} Images")
+                
 
     def load(self, path):
 
@@ -209,12 +240,14 @@ class Trainer:
 
 
     @_call_if_verbose
-    def log(self, epoch, logs):
+    def log(self, epoch, logs,progress_bar):
         def group(x): return x.split("_")[-1]
         for key, value in logs.items():
             self.history[key].append(value)
             if self.verbose:
                 self.writer.add_scalar(f"{group(key)}/{key}", value, epoch)
+        progress_bar.set_postfix(**logs)
+
 
     @_call_if_verbose
     def log_gradients(self):
@@ -231,7 +264,7 @@ class Trainer:
         5. train,test,valid datasnapshots
         6. MIA related stuff
         """
-
+        """
         self.model.eval()
         debug_data = defaultdict(list)
 
@@ -242,12 +275,13 @@ class Trainer:
         # debug_data["incorrect_predictions"].append((batch_idx*inputs.size(0) + debug_predictions).detach())
         # debug_data["targets"].append(targets[debug_predictions].detach())
         # debug_data["probs"].append(probs[debug_predictions].detach())
-        """
+
         log_path = os.path.join(Config.LOG_PATH,self.name)
         if not os.path.exists(log_path):
             os.makedirs(log_path)
         torch.save({ name : torch.cat(each_tensors,dim=0) for name,each_tensors in debug_data.items()}, os.path.join(log_path, f"debug_predictions_{debug_id}.pt"))
         """
+
         if self.test_loader is not None:
             #rewrite this one
             criterion = nn.CrossEntropyLoss(reduction="none")
@@ -266,7 +300,8 @@ class Trainer:
             ).detach().cpu(), all_losses[0].flatten().detach().cpu())
             plot_losses(ax2, all_confidence[1].flatten().detach().cpu(), all_confidence[2].flatten(
             ).detach().cpu(), all_confidence[0].flatten().detach().cpu(), name="Confidence")    
-            fig.savefig(os.path.join(self.log_path,f"losses_{self.epoch}.png"))
+            fig.savefig(os.path.join(self.log_path,f"{self.name}_losses_{self.epoch}.png"))
+        
         return
 
     def accuracy(self, outputs, targets):

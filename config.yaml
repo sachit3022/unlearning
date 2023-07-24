@@ -12,29 +12,37 @@ directory:
 
 data:
   num_workers: 16
+  rf_split: [0.1, 0.9]
 
 model:
   name: 'resnet18' 
   model_args:
     num_classes: 10
-  checkpoint: "/research/hal-gaudisac/unlearning/models/weights_resnet18_cifar10.pth"
+  #checkpoint: "/research/hal-gaudisac/unlearning/models/weights_resnet18_cifar10.pth"
 
 trainer :
-  checkpoint: '/research/hal-gaudisac/unlearning/models/weigths_resnet18.pt'
+  #checkpoint: '/research/hal-gaudisac/unlearning/models/weigths_resnet18.pt'
   verbose: True
   train: True
-  log_freq: 20
-  epochs: 1
+  
+  log_freq: 10
+  epochs: 200
+
   optimizer: 
     type: 'SGD'
-    lr: 0.1
-    momentum: 0.9
+    lr: 0.015
+    #momentum: 0.9
     weight_decay: 0.0001
+  # optimizer: 
+  #   type: 'AdamW'
+  #   lr: 0.01
+  #   weight_decay: 0.0001
+  #   betas: [0.9, 0.999]
+
   scheduler: 
-    type: 'lr_scheduler.CosineAnnealingWarmRestarts'
-    T_0: 10
-    eta_min: 1e-6
-    last_epoch: -1
+    type: 'CosineAnnealingLR'
+    T_max: 200
+    eta_min: 0.0001
 
 attack_model:
   name: 'MLP-grad-mia'
@@ -42,22 +50,49 @@ attack_model:
   charecterstic: 'gradients'
   folds: 5
   model_args:
-    model_config: [512,256,128,64,32,16,8]
+    model_config: [512,128,16,8]
     num_classes: 2
     
 attack_trainer: 
+
+  name: 'mia trainer'
   verbose: True
-  epochs: 100
-  optimizer:
+  epochs: 300
+  log_freq: 10
+
+  optimizer: 
     type: 'SGD'
     lr: 0.1
     momentum: 0.9
     weight_decay: 0.0001
+
   scheduler: 
-    type: 'lr_scheduler.CosineAnnealingWarmRestarts'
-    T_0: 10
-    eta_min: 1e-6
-    last_epoch: -1
+    type: 'CosineAnnealingLR'
+    T_max: 300
+    eta_min: 0.0001
+
+finetune :
+  verbose: True
+  train: True
+  
+  log_freq: 10
+  epochs: 50
+
+  # optimizer: 
+  #   type: 'AdamW'
+  #   lr: 0.01
+  #   weight_decay: 0.0001
+  #   betas: [0.9, 0.999]
+
+  optimizer: 
+    type: 'SGD'
+    lr: 0.0015
+    #momentum: 0.9
+    weight_decay: 0.0001
+  scheduler: 
+    type: 'CosineAnnealingLR'
+    T_max: 50
+    eta_min: 0.00001
 
 
 

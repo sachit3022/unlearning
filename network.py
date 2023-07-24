@@ -15,7 +15,7 @@ class MiaBaseModel(nn.Module):
         self.linear = nn.Linear(in_features=in_features,
                                 out_features=out_features)
         self.bn = nn.BatchNorm1d(out_features)
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.2)
         self.relu = nn.ReLU()
 
     def forward(self, x):
