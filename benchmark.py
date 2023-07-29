@@ -67,7 +67,7 @@ def main(args):
     net.name = args.model.name
     logger.info(f"Model has {count_parameters(net)} parameters")    
 
-
+    
     ##### CONFIGURE TRAINING #####
     # type of create_dataloaders_missing_class, create_dataloaders_uniform_sampling, create_injection_dataloaders
     # type of trainer: Trainer, AdverserialTrainer, NNTrainer
@@ -76,6 +76,7 @@ def main(args):
     #compute_unlearning_metrics: test and forget set discriminators used if forget and test are from the same distribution
     #compute_retrain_unlearning_metrics: retrain from scratch model and unlearnt model outputs as  discriminators used if forget and test are from different distributions
     ##########################
+    dataloader_fn = create_dataloaders_uniform_sampling
 
     
     # scratch trainer for perfect baseline
@@ -83,7 +84,7 @@ def main(args):
     scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
 
     scratch_trainer_settings = TrainerSettings(name = "scratch_"+net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
-    scratch_data_loaders = create_dataloaders_missing_class(config=args,scratch=True)
+    scratch_data_loaders = dataloader_fn(config=args,scratch=True)
     scratch_trainer = Trainer(model=copy.deepcopy(net),dataloaders=scratch_data_loaders,trainer_args=scratch_trainer_settings)
     
     if args.scratch_trainer_checkpoint is not None:
@@ -93,7 +94,7 @@ def main(args):
 
 
     # train model on full data
-    dataloaders =create_dataloaders_missing_class(config=args)
+    dataloaders =dataloader_fn(config=args)
     trainer_settings = TrainerSettings(name = net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
     if args.trainer_checkpoint is not None:
@@ -112,8 +113,6 @@ def main(args):
         mia_scores = compute_retrain_unlearning_metrics(args, unleart_model, scratch_trainer.model, dataloaders)
         logger.info(f"MIA score after unlearning for is {mia_scores}")
     return 
-
-
 
 
 if __name__ == "__main__":

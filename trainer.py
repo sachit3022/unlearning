@@ -16,11 +16,9 @@ from torch import nn
 from torch import optim
 import torch.nn.functional as F
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
+
 from torch.utils.data import DataLoader, Subset
 from torchmetrics import  ConfusionMatrix
-
-
-from config import dotdict
 from plots import plot_losses,plot_image_grid,plot_confusion_matrix
 from dataset import TrainerDataLoaders
 
@@ -191,7 +189,7 @@ class Trainer:
             self.test_epoch()
             self.epoch_logging(epoch,progress_bar)
                 
-        self.model.load_state_dict(self.best_model)
+        #self.model.load_state_dict(self.best_model)
         torch.save(self.best_model, self.model_dir+f"/model_{self.name}.pt")
         return self.model
     

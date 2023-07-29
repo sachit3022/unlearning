@@ -245,7 +245,7 @@ def create_dataloaders_missing_class(config,scratch=False):
     else:
         return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
 
-def create_dataloaders_uniform_sampling(config):
+def create_dataloaders_uniform_sampling(config,scratch=False):
     train_transforms = transforms.Compose(               
         [
             transforms.RandomCrop(32, 4),
@@ -267,7 +267,10 @@ def create_dataloaders_uniform_sampling(config):
         root=config.DATA_PATH, train=False, download=False, transform=test_transforms
     )
     test_set, val_set = torch.utils.data.random_split(held_out, [0.2, 0.8])
-    return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
+    if scratch:
+        return make_dataloaders(config,retain_set, retain_set, forget_set,val_set,test_set)
+    else:
+        return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
 
 
 def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
