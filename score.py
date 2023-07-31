@@ -16,7 +16,7 @@ from sklearn.decomposition import PCA
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
-
+from torchmetrics import Accuracy, ConfusionMatrix
 
 from network import MiaModel
 from trainer import Trainer, TrainerSettings
@@ -240,6 +240,42 @@ class RetrainMIAScore:
         return mia_score
     
 
+
+class CMScore:
+
+    def __init__(self, parent_model,retrain_model,num_classes, device):
+
+        self.model = parent_model
+        self.scratch_model = retrain_model
+        self.device = device
+        self.loss_fn = nn.CrossEntropyLoss(reduction="none")
+        self.acc = Accuracy("multiclass",num_classes=num_classes).to(device)
+        self.cm = ConfusionMatrix("multiclass",num_classes=num_classes).to(device)
+        self.scratch_cm = ConfusionMatrix("multiclass",num_classes=num_classes).to(device)
+
+
+    def compute_cm_score(self,dataloaders):
+        metrics = {}
+        for dl_name,dl in zip(["forget","retain","val"],[dataloaders.forget,dataloaders.retain,dataloaders.val]):
+            self.acc.reset()
+            self.cm.reset()
+            for _,batch in enumerate(dl):
+                inputs,targets = batch[0].to(self.device),batch[1].to(self.device)
+                parent_outputs,scratch_outputs = self.model(inputs),self.scratch_model(inputs)
+                self.acc.update(parent_outputs,targets)
+                self.cm.update(parent_outputs,targets)
+                self.scratch_cm.update(scratch_outputs,targets)
+
+            metrics[dl_name] = (1 - self.acc.compute().detach().item())*100
+        
+        val_cm,sc_val_cm = self.cm.compute().detach().cpu().numpy(),self.scratch_cm.compute().detach().cpu().numpy()
+        
+        val_cm = val_cm / (val_cm.sum(axis=1,keepdims=True)+1)
+        sc_val_cm = sc_val_cm / (sc_val_cm.sum(axis=1,keepdims=True)+1)
+        metrics["cm_score"] = np.linalg.norm(val_cm-sc_val_cm)
+        return metrics
+    
+
 def compute_unlearning_metrics(args, model, dataloaders):
     mia_scores = {"retain_forget":0,"forget_test":0,"retain_test":0}
     for name, t, f, in [("retain_forget", dataloaders.retain, dataloaders.forget), ("forget_test", dataloaders.forget,  dataloaders.test), ("retain_test", dataloaders.retain, dataloaders.test)]:
@@ -261,3 +297,7 @@ def compute_retrain_unlearning_metrics(args, model,retrain_model,dataloaders):
         miaScore = RetrainMIAScore(parent_model=model,retrain_model=retrain_model, attack_model=attack_model,charecterstic = args.attack_model.charecterstic,folds=args.attack_model.folds, attack_train_settings=mia_args)
         mia_scores[name] = miaScore.compute_model_mia_score(t)
     return mia_scores
+
+def compute_acc_metrics(args, model,retrain_model,dataloaders):
+    cMscore = CMScore(model,retrain_model,args.data.num_classes,args.device)
+    return cMscore.compute_cm_score(dataloaders)

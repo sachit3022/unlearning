@@ -13,7 +13,7 @@ import network
 import trainer as tr
 from trainer import Trainer, AdverserialTrainer, NNTrainer, TrainerSettings, count_parameters
 from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders
-from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics # 2 types of unleaning metrics
+from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
 
 
 def finetune_unlearning(args, model, dataloaders):
@@ -84,13 +84,13 @@ def main(args):
     scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
 
     scratch_trainer_settings = TrainerSettings(name = "scratch_"+net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
-    scratch_data_loaders = dataloader_fn(config=args,scratch=True)
+    scratch_data_loaders = dataloader_fn(config=args,scratch=False)
     scratch_trainer = Trainer(model=copy.deepcopy(net),dataloaders=scratch_data_loaders,trainer_args=scratch_trainer_settings)
     
     if args.scratch_trainer_checkpoint is not None:
-        scratch_trainer = scratch_trainer.load_from_checkpoint(args.scratch_trainer_checkpoint)
+       scratch_trainer = scratch_trainer.load_from_checkpoint(args.scratch_trainer_checkpoint)
     if args.trainer.train:
-        scratch_trainer.train(epochs=args.trainer.epochs)
+       scratch_trainer.train(epochs=args.trainer.epochs)
 
 
     # train model on full data
@@ -103,7 +103,9 @@ def main(args):
         trainer.train(epochs=args.trainer.epochs)
     
     mia_scores = compute_retrain_unlearning_metrics(args, trainer.model, scratch_trainer.model, dataloaders) # or can use compute_unlearning_metrics
-    logger.info(f"MIA score before unlearning for is {mia_scores}")
+    scores = compute_acc_metrics(args, trainer.model,scratch_trainer.model,dataloaders)
+    logger.info(f"scores before unlearning for is {scores}")
+    
 
     #insert unlearning algorithm here.
     for unlearning_funcs in [scrubs_unlearning,nearest_neighbor_unlearning,finetune_unlearning]:
@@ -112,6 +114,8 @@ def main(args):
         unleart_model = unlearning_funcs(args,model,dataloaders)
         mia_scores = compute_retrain_unlearning_metrics(args, unleart_model, scratch_trainer.model, dataloaders)
         logger.info(f"MIA score after unlearning for is {mia_scores}")
+        scores = compute_acc_metrics(args, unleart_model,scratch_trainer.model,dataloaders)
+        logger.info(f"scores after unlearning for is {scores}")
     return 
 
 

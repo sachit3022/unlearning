@@ -245,6 +245,7 @@ def create_dataloaders_missing_class(config,scratch=False):
     else:
         return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
 
+
 def create_dataloaders_uniform_sampling(config,scratch=False):
     train_transforms = transforms.Compose(               
         [

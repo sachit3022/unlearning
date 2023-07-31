@@ -1,7 +1,7 @@
 BASE_DIR : "unlearning"
 DEVICE : 'cuda:1'
 SEED : 42
-BATCH_SIZE : 1024
+BATCH_SIZE : 4096
 DATA_PATH: 'data'
 MODEL_DIR: 'models'
 
@@ -13,6 +13,7 @@ directory:
 data:
   num_workers: 32
   rf_split: [0.1, 0.9]
+  num_classes: 10
 
 model:
   name: 'resnet18' 
@@ -22,28 +23,27 @@ model:
 
 trainer :
   #checkpoint: '/research/hal-gaudisac/unlearning/models/weigths_resnet18.pt'
-  verbose: False
+  verbose: True
   train: True
   
-  log_freq: 50
-  epochs:  300
+  log_freq: 10
+  epochs:  200
 
-  # optimizer: 
-  #   type: 'SGD'
-  #   lr: 0.015
-  #   momentum: 0.9
-  #   weight_decay: 0.0001
-  
   optimizer: 
-    type: 'AdamW'
-    lr: 0.015
-    weight_decay: 0.0001
-    betas: [0.9, 0.999]
+    type: 'SGD'
+    lr: 0.1
+    momentum: 0.9
+    weight_decay: 0.00005
+  
+  # optimizer: 
+  #   type: 'AdamW'
+  #   lr: 0.15
+  #   weight_decay: 0.00001
+  #   betas: [0.9, 0.999]
 
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 300
-    eta_min: 0.0001
+    T_max: 200
 
 attack_model:
   name: 'MLP-grad-mia'
@@ -69,36 +69,34 @@ attack_trainer:
   optimizer: 
     type: 'AdamW'
     lr: 0.01
-    weight_decay: 0.0001
+    weight_decay: 0.00001
     betas: [0.9, 0.999]
 
   scheduler: 
     type: 'CosineAnnealingLR'
     T_max: 300
-    eta_min: 0.0001
 
 finetune :
-  verbose: False
+  verbose: True
   train: True
   
-  log_freq: 50
-  epochs: 100
-
-  optimizer: 
-    type: 'AdamW'
-    lr: 0.015
-    weight_decay: 0.0001
-    betas: [0.9, 0.999]
+  log_freq: 10
+  epochs: 50
 
   # optimizer: 
-  #   type: 'SGD'
+  #   type: 'AdamW'
   #   lr: 0.015
-  #   momentum: 0.9
-  #   weight_decay: 0.0001
+  #   weight_decay: 0.00001
+  #   betas: [0.9, 0.999]
+
+  optimizer: 
+    type: 'SGD'
+    lr: 0.01
+    momentum: 0.9
+
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 100
-    eta_min: 0.0001
+    T_max: 50
 
 # scratch_trainer_checkpoint: '/research/hal-gaudisac/unlearning/models/scratch_resnet18.pt'
 # trainer_checkpoint: '/research/hal-gaudisac/unlearning/models/resnet18.pt'

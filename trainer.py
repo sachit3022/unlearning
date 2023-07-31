@@ -157,7 +157,7 @@ class Trainer:
         self.test_loader = dataloaders.test
 
         self.optimizer = operator.attrgetter(trainer_args.optimizer.type)(optim)(
-                                    model.parameters(), **{k: v for k, v in trainer_args.optimizer.__dict__.items() if k!="type"})
+                                    self.model.parameters(), **{k: v for k, v in trainer_args.optimizer.__dict__.items() if k!="type"})
         self.scheduler = operator.attrgetter( trainer_args.scheduler.type)(
                             tr)(self.optimizer, **{k: v for k, v in  trainer_args.scheduler.__dict__.items() if k!="type"})
 
@@ -165,6 +165,8 @@ class Trainer:
         self.verbose = trainer_args.verbose
 
         self.init_trainer_tracker()
+        self.model_dir = trainer_args.model_dir
+        self.logger = logging.getLogger()
 
         #logging
         if self.verbose: 
@@ -172,7 +174,7 @@ class Trainer:
             self.writer = SummaryWriter(self.log_path + f"/runs/{self.name}")
             self.logger = logging.getLogger()
             self.log_freq = trainer_args.log_freq
-            self.model_dir = trainer_args.model_dir
+            
             
             
     def load_from_checkpoint(self, path):
@@ -190,6 +192,8 @@ class Trainer:
             self.epoch_logging(epoch,progress_bar)
                 
         #self.model.load_state_dict(self.best_model)
+        self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
+        self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
         torch.save(self.best_model, self.model_dir+f"/model_{self.name}.pt")
         return self.model
     
@@ -203,12 +207,13 @@ class Trainer:
             loss = self.loss_fn(outputs, targets) 
             self.optimizer.zero_grad()      
             loss.backward()
+            self.optimizer.step()
 
             #### LOGGING ######
             self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
             ###################
             
-            self.optimizer.step()
+            
 
         self.scheduler.step()
     
@@ -268,13 +273,13 @@ class Trainer:
         }, path)
 
     ############################# START Logging ########################################
-    @_call_if_verbose
+    @_call_if_vanila_verbose
     def batch_logging(self,split,batch_id,batch_data,outputs,loss):
         self.log_metrics(split,batch_id,batch_data,outputs,loss)
-        self.log_gradients(split)
-        self.random_data_snap(split,batch_id,batch_data,outputs,loss)
+        #self.log_gradients(split)
+        #self.random_data_snap(split,batch_id,batch_data,outputs,loss)
 
-    @_call_if_verbose
+    @_call_if_vanila_verbose
     def epoch_logging(self,epoch,progress_bar):
         metric_dict =  {"lr": self.scheduler.get_last_lr()[0]}
         for split,metrics in self.metrics.items():
@@ -287,7 +292,7 @@ class Trainer:
                     self.best_model = self.model.state_dict()
         self.log(epoch,metric_dict,progress_bar)
 
-    @_call_if_verbose
+    @_call_if_vanila_verbose
     def log(self, epoch, logs,progress_bar=None):                    
         def group(x): return x.split("_")[-1]
         for key, value in logs.items():
@@ -299,7 +304,8 @@ class Trainer:
     @_call_if_verbose
     def  random_data_snap(self,split,batch_id,batch_data,outputs,loss):
         plot_image_grid(batch_data[0][:16],labels=batch_data[1][:16], filename=self.log_path+f"/{self.name}_{split}_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} {split} Images")
-        
+    
+    @torch.no_grad()
     def log_metrics(self,split,batch_id,batch_data,outputs,loss):
         inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
         for metric_name,metric_fn in self.metrics[split].items():
