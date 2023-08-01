@@ -5,8 +5,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-
 from torchvision.models import resnet18
+
+#just get resnet18 features
+class ResNet18(nn.Module):
+    def __init__(self, pretrained: bool=True) -> None:
+        super().__init__()
+        self.model = resnet18(pretrained=pretrained)
+        self.model.fc = nn.Identity()
+
+        #muti task model
+        self.model.fc1 = nn.Linear(512, 2)
+        self.model.fc2 = nn.Linear(512, 2)
+        
+    def forward(self, x):
+        return self.model(x)
 
 
 class MiaBaseModel(nn.Module):
@@ -26,7 +39,7 @@ class MiaBaseModel(nn.Module):
         return out
 
 class MiaModel(nn.Module):
-    def __init__(self, model_config: List[int], num_classes: int, pretrained_model=None) -> None:
+    def __init__(self, model_config: List[int], num_classes: int=2, pretrained_model=None) -> None:
         super().__init__()
         self.model_config = model_config
         self.num_classes = num_classes
@@ -123,6 +136,7 @@ class ResNet(nn.Module):
     def __init__(self, block_config: List[Tuple[int]], num_classes: int = 10):
         super(ResNet, self).__init__()
         self.block_config = block_config
+        self.num_classes= num_classes
 
         self.in_planes = block_config[0][1]
         self.out_layer = block_config[-1][1]

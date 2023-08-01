@@ -45,7 +45,7 @@ def plot_image_grid(images, labels=None, filename=None,title=None):
     if len(images.shape) == 4: #this signifies batch of images
         images= inverse_normalize(images)
         fig, ax = plt.subplots(figsize=(12, 6))
-        plt.title(f"{title},{CIFAR_10_CLASSES[labels.detach().cpu()]}")
+        plt.title(f"{title},{labels.detach().cpu()}")
         ax.set_xticks([])
         ax.set_yticks([])
         #convert images to 0 1 torch with first diamension of batch
@@ -57,7 +57,7 @@ def plot_image_grid(images, labels=None, filename=None,title=None):
 
 def plot_confusion_matrix(cm,filename=None):
     fig, ax = plt.subplots(figsize=(12, 6))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=CIFAR_10_CLASSES, yticklabels=CIFAR_10_CLASSES, ax=ax)
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.title("Confusion Matrix")

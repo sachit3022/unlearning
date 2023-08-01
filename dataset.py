@@ -1,17 +1,26 @@
 import random
 import numpy as np
-from typing import Any,Optional
+from typing import Any,Optional, Sized
 from dataclasses import dataclass
 
 from sklearn.model_selection import StratifiedShuffleSplit
 
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import Sampler
 
 import torchvision
 from torchvision.transforms import functional as F
 from torchvision import transforms
+import os
+import time
 
+import pandas as pd
+import torch
+from PIL import Image
+from tqdm import tqdm
+from plots import plot_image_grid
+from torchvision.datasets import CelebA   
 
 class TorchStratifiedShuffleSplit:
     def __init__(self, n_splits: int = 5, random_state: int = 0):
@@ -172,6 +181,78 @@ class Grayscale(object):
         return self.__class__.__name__ + '(num_output_channels={0})'.format(self.num_output_channels)
 
 
+
+################################################# CelebA #################################################
+'''
+CelebA code make it more adaptive to the dataset
+'''
+import json
+class SampleCelebA(Sampler):
+    def __init__(self,data_source,seed=42,retain=None) -> None:
+        self.data_source = data_source
+        self.num_samples = len(data_source)
+        self.generator = torch.Generator().manual_seed(seed)
+        self.weights = torch.where(self.data_source.mask == int(retain),self.data_source.weights,0).long() if retain is not None else self.data_source.weights
+        self.retain = retain
+    def __iter__(self):
+        rand_tensor = torch.multinomial( self.weights,self.num_samples, replacement=True)
+        yield from iter(rand_tensor.tolist())
+    
+    def __len__(self):
+        return self.data_source.mask.sum().item()
+    
+class UnlearnCelebA(Dataset):
+
+    def __init__(self, root,split="train",rf_split=[0.1,0.9],seed=42) -> None:
+        #considering only 1000 samples for now and if it is successfull increase the number of samples
+        super().__init__()
+        self.train_transforms = transforms.Compose(               
+            [
+                transforms.RandomCrop(112, 4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ]
+        )
+        self.test_transforms = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        self.dataset = CelebA(root=root,split=split, download=False,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
+        
+        self.database_len = 1000 #len(self.dataset)
+        self.classify_across = 8 #black hair
+
+        with open("data/celeba/meta.json") as f:
+            self.meta = json.load(f)
+        
+        imbalence = self.meta[self.dataset.attr_names[self.classify_across]]
+        self.weights = torch.ones(self.database_len)
+        self.weights[self.dataset.attr[:self.database_len,self.classify_across]==1] = 1/imbalence
+        self.weights[self.dataset.attr[:self.database_len,self.classify_across]==0] = 1/(1-imbalence)
+
+        if rf_split is not None and split=="train":
+            #there are 10177 identities in celebA. We sample 10% as forget set and 90% as retain set
+            #self.identiy_mask = torch.rand(10177,generator=torch.Generator().manual_seed(seed)) > rf_split[0]
+            #self.mask = np.zeros(self.database_len,dtype=np.bool)
+            #fill_mask= lambda x: self.identiy_mask[x]
+            #self.mask = torch.tensor(np.vectorize(fill_mask)(self.dataset.identity[:self.database_len]))
+            self.mask = torch.rand(self.database_len,generator=torch.Generator().manual_seed(seed)) > rf_split[0]
+        else:
+            self.mask = torch.zeros(self.database_len,dtype=torch.bool)
+
+    def __getitem__(self, index):
+        dp = self.dataset[index]
+        return (dp[0],self.dataset.attr[index][self.classify_across],self.mask[index])
+    
+    def __len__(self) -> int:
+        return self.database_len
+
+##############################################################################################################
+
+
+
 def make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set):
     train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, shuffle=True,
                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
@@ -216,6 +297,7 @@ def create_injection_dataloaders(config):
     retain_set, forget_set = train_set.retain_forget_split()
     val_set, test_set = heldout_set.retain_forget_split()
     return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
+
 
 def create_dataloaders_missing_class(config,scratch=False):
     train_transforms = transforms.Compose(
@@ -276,3 +358,32 @@ def create_dataloaders_uniform_sampling(config,scratch=False):
 
 def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
     return TrainerDataLoaders(**{"train": dataloaders.retain, "retain": dataloaders.retain, "forget": dataloaders.forget, "val": dataloaders.val, "test": dataloaders.test})
+
+
+
+def create_celeba_dataloaders(config,scratch=False):
+
+
+    train_set = UnlearnCelebA(root = config.DATA_PATH, split="train")
+    test_set = UnlearnCelebA(root = config.DATA_PATH, split="test")
+    val_set = UnlearnCelebA(root = config.DATA_PATH, split="valid")
+
+    train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(train_set),
+                              num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    retain_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE,sampler=SampleCelebA(train_set, retain=True),
+                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    forget_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(train_set, retain=False),
+                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    test_loader = DataLoader(test_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(test_set),
+                             num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(val_set),
+                            num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    if scratch:
+        return TrainerDataLoaders(**{"train": retain_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+    else:
+        return TrainerDataLoaders(**{"train": train_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+
+
+
+
+

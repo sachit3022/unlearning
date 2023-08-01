@@ -12,7 +12,7 @@ import config
 import network
 import trainer as tr
 from trainer import Trainer, AdverserialTrainer, NNTrainer, TrainerSettings, count_parameters
-from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders
+from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders
 from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
 
 
@@ -29,7 +29,7 @@ def finetune_unlearning(args, model, dataloaders):
 def scrubs_unlearning(args,model,dataloaders):
     optimizer_config = getattr(tr, args.finetune.optimizer.type + "OptimConfig" )(**args.finetune.optimizer)
     scheduler_config = getattr(tr, args.finetune.scheduler.type + "SchedulerConfig" )(**args.finetune.scheduler)
-    trainer_settings = TrainerSettings(name = f"scrubs_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    trainer_settings = TrainerSettings(name = f"scrubs_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.disjctory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     finetune_trainer = AdverserialTrainer(model=model,dataloaders=dataloaders,trainer_args=trainer_settings)
     finetune_trainer.train(args.finetune.epochs)
     return finetune_trainer.model
@@ -76,7 +76,8 @@ def main(args):
     #compute_unlearning_metrics: test and forget set discriminators used if forget and test are from the same distribution
     #compute_retrain_unlearning_metrics: retrain from scratch model and unlearnt model outputs as  discriminators used if forget and test are from different distributions
     ##########################
-    dataloader_fn = create_dataloaders_uniform_sampling
+    
+    dataloader_fn = create_celeba_dataloaders #create_dataloaders_uniform_sampling
 
     
     # scratch trainer for perfect baseline
