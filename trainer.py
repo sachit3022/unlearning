@@ -47,6 +47,8 @@ class AverageMeter:
 
 
 
+
+
 def count_parameters(model):
     # copied from pytorch disccussion forum
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -104,13 +106,89 @@ class TrainerSettings:
     model_dir: str = "models"
     num_classes: int = 10
 
+
+#only valid for num classes 2 if more just an average works
+class PrecesionFRR(AverageMeter):
+    def __init__(self,num_classes=2) -> None:
+        self.fpr = 0.1
+    def update(self,inputs,outputs):
+        #compute the precision at a given fpr with true and predicted probabilities
+        #step 1 calucualte the theshold for the given fpr
+        #step 2 calculate the precision and recall
+        #step 3 update the average meter
+        #write a binary search for thereshold with max iters 10
+        start_theshold,end_theshold = 0,1
+        for _ in range(10):
+            mid = (start_theshold+end_theshold)/2
+            if self.compute_fpr(inputs,outputs,mid) < self.fpr:
+                end_theshold = mid
+            else:
+                start_theshold = mid
+                
+        #now we have the theshold calculate the precision and recall
+        precision = self.compute_precision(inputs,outputs,mid)
+        self.sum += precision * len(inputs)
+        self.count += len(inputs)
+        self.avg = self.sum / self.count
+
+    def compute_fpr(self,inputs,outputs,theshold):
+        FP = torch.logical_and(inputs<theshold, outputs==1).sum()
+        TN = torch.logical_and(inputs<theshold, outputs==0).sum()
+        return FP/(FP+TN)
+    def compute_precision(self,inputs,outputs,theshold):
+        FP = torch.logical_and(inputs<theshold, outputs==1).sum()
+        TP = torch.logical_and(inputs<theshold,outputs==0).sum()
+        return (TP/(FP+TP)).item()
+
+
+        
+
+
+class SingleConfusionMatrix:
+    def __init__(self,task='binary',num_classes=2) -> None:
+        self.cm = ConfusionMatrix(task=task,num_classes=num_classes)
+    def update(self,inputs,outputs):
+        self.cm.update(inputs,outputs)
+    def compute(self):
+        self.cm.compute()
+    def reset(self):
+        self.cm.reset()
+    def plot(self,filename):
+        
+        plot_confusion_matrix(self.cm.compute().cpu().numpy(),filename=f"{filename.split('.')[0]}.{filename.split('.')[1]}")
+    def to(self,device):
+        self.cm.to(device)
+        return self
+
+class MultiConfusionMatrix:
+    def __init__(self,task='binary',num_heads=40,num_classes=2) -> None:
+        self.cms = [ConfusionMatrix(task=task,num_classes=num_classes) for _ in range(num_heads)]
+    def update(self,inputs,outputs):
+        #format BXH and H=40
+        for i in range(len(self.cms)):
+            self.cms[i].update(inputs[:,i],outputs[:,i])
+    def compute(self):
+        for i in range(len(self.cms)):
+            self.cms[i].compute()
+    def reset(self):
+        for i in range(len(self.cms)):
+            self.cms[i].reset()
+    def plot(self,filename):
+        for i in range(len(self.cms)):
+            plot_confusion_matrix(self.cms[i].compute().cpu().numpy(),filename=f"{filename.split('.')[0]}_{i}.{filename.split('.')[1]}")
+    def to(self,device):
+        for i in range(len(self.cms)):
+            self.cms[i].to(device)
+        return self
+            
 class Metrics(dict):
     #if you want to add more metrics, add them here and it should have update and reset methods
     def __init__(self,device,num_classes):
         self.device = device
-        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),"cm" : ConfusionMatrix(task="multiclass",num_classes=num_classes).to(self.device) }
+        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),"pfpr": PrecesionFRR(),"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device)} #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#
         self.best_accuracy = 0
         self.best_loss = np.inf
+
         for m in self.metrics.keys():
             setattr(self, m, self.metrics[m])
             
@@ -176,7 +254,6 @@ class Trainer:
             self.log_freq = trainer_args.log_freq
             
             
-            
     def load_from_checkpoint(self, path):
         #make it class method later.
         trainer = self.__class__(copy.deepcopy(self.model), self.dataloaders, self.trainer_args)
@@ -185,6 +262,7 @@ class Trainer:
 
     def train(self, epochs: int):
         progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch+1), disable=not self.verbose)
+      
         for epoch in progress_bar:
             self.epoch = epoch
             self.train_epoch()
@@ -199,10 +277,11 @@ class Trainer:
     
 
     def train_epoch(self):
-        self.model.train()       
+        self.model.train()
+        self.metrics.train.reset() 
         for batch_id, batch_data in enumerate(self.train_loader):
             inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
-            outputs = self.model(inputs) 
+            outputs = self.model(inputs) #targets 
            
             loss = self.loss_fn(outputs, targets) 
             self.optimizer.zero_grad()      
@@ -212,15 +291,14 @@ class Trainer:
             #### LOGGING ######
             self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
             ###################
-            
-            
-
         self.scheduler.step()
+    
     
     def test_epoch(self):
         self.test(self.val_loader,self.metrics.val, split="val")
         if self.test_loader is not None: self.test(self.test_loader, self.metrics.test, split="test")
         self.debug_epoch()
+
 
     @torch.no_grad()
     def test(self, loader: DataLoader, metrics: Metrics,split="test"):
@@ -245,7 +323,7 @@ class Trainer:
 
     def _call_if_verbose(func):
         def wrapper(self, *args, **kwargs):
-            if self.verbose and (self.epoch+1) % self.log_freq == 0:
+            if self.verbose and (self.epoch) % self.log_freq == 0:
                 return func(self, *args, **kwargs)
             else:
                 return None
@@ -303,6 +381,7 @@ class Trainer:
         
     @_call_if_verbose
     def  random_data_snap(self,split,batch_id,batch_data,outputs,loss):
+        #if random.random() < 0.1:
         plot_image_grid(batch_data[0][:16],labels=batch_data[1][:16], filename=self.log_path+f"/{self.name}_{split}_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} {split} Images")
     
     @torch.no_grad()
@@ -314,9 +393,10 @@ class Trainer:
             elif metric_name == "accuracy":
                 metric_fn.update(self.accuracy(outputs, targets), inputs.size(0))
             elif metric_name == "cm":
-                metric_fn.update(torch.argmax(outputs, dim=1), targets)
+                metric_fn.update(torch.argmax(outputs, dim=-1), targets)
             else:
-                raise NotImplementedError
+                #get logits
+                metric_fn.update(torch.argmax(torch.softmax(outputs,dim=-1), dim=-1),targets)
 
     @_call_if_verbose
     def log_gradients(self,split):
@@ -325,7 +405,8 @@ class Trainer:
 
     @_call_if_verbose
     def log_cm(self,split):
-       plot_confusion_matrix(self.metrics[split].cm.compute().cpu(),filename=os.path.join(self.log_path,f"{self.name}_{split}_cm_{self.epoch}.png"))
+       
+        self.metrics[split].cm.plot(filename=os.path.join(self.log_path,f"{self.name}_{split}_cm_{self.epoch}.png"))
 
     @_call_if_verbose
     def debug_epoch(self):
@@ -381,8 +462,8 @@ class Trainer:
     ############################# END Logging ########################################
 
     def accuracy(self, outputs, targets):
-        _, preds = torch.max(outputs, dim=1)
-        return torch.sum(preds == targets).item() / len(preds)
+        _, preds = torch.max(outputs, dim=-1)
+        return  (preds == targets).float().mean().item()
 
     def cross_validation_score(self, epochs=100):
         self.train(epochs)
@@ -513,3 +594,4 @@ class AdverserialTrainer(Trainer):
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+

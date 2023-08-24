@@ -6,15 +6,17 @@ Returns:
 
 import copy
 import torch
+import torch.nn.functional as F
 from torch import nn
 import logging
 import config
+import json
 import network
 import trainer as tr
 from trainer import Trainer, AdverserialTrainer, NNTrainer, TrainerSettings, count_parameters
-from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders
+from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders,create_celeba_id_dataloaders
 from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
-
+from network import MTLLoss
 
 def finetune_unlearning(args, model, dataloaders):
     #how forgetting happens in the model when finetuining.
@@ -50,6 +52,7 @@ def nearest_neighbor_unlearning(args, model, dataloaders):
 
 #####################################################################################################################
 
+
 def main(args):
     
 
@@ -77,13 +80,14 @@ def main(args):
     #compute_retrain_unlearning_metrics: retrain from scratch model and unlearnt model outputs as  discriminators used if forget and test are from different distributions
     ##########################
     
-    dataloader_fn = create_celeba_dataloaders #create_dataloaders_uniform_sampling
+    dataloader_fn = create_celeba_dataloaders #create_dataloaders_missing_class #create_celeba_dataloaders #create_celeba_id_dataloaders #create_dataloaders_uniform_sampling
 
     
     # scratch trainer for perfect baseline
     optimizer_config = getattr(tr, args.trainer.optimizer.type + "OptimConfig" )(** args.trainer.optimizer)
     scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
-
+    
+    """
     scratch_trainer_settings = TrainerSettings(name = "scratch_"+net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     scratch_data_loaders = dataloader_fn(config=args,scratch=False)
     scratch_trainer = Trainer(model=copy.deepcopy(net),dataloaders=scratch_data_loaders,trainer_args=scratch_trainer_settings)
@@ -92,7 +96,9 @@ def main(args):
        scratch_trainer = scratch_trainer.load_from_checkpoint(args.scratch_trainer_checkpoint)
     if args.trainer.train:
        scratch_trainer.train(epochs=args.trainer.epochs)
-
+    """
+    #mtl_loss_fn = MTLLoss(heads=range(40)) #range(40)[8,15,19]
+    #loss_fn=mtl_loss_fn
 
     # train model on full data
     dataloaders =dataloader_fn(config=args)
@@ -100,9 +106,16 @@ def main(args):
     trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
     if args.trainer_checkpoint is not None:
         trainer = trainer.load_from_checkpoint(args.trainer_checkpoint)
+    trainer.test_epoch()
+    
     if args.trainer.train:
         trainer.train(epochs=args.trainer.epochs)
-    
+
+    # compute memorization score
+
+
+
+    """
     mia_scores = compute_retrain_unlearning_metrics(args, trainer.model, scratch_trainer.model, dataloaders) # or can use compute_unlearning_metrics
     scores = compute_acc_metrics(args, trainer.model,scratch_trainer.model,dataloaders)
     logger.info(f"scores before unlearning for is {scores}")
@@ -117,6 +130,9 @@ def main(args):
         logger.info(f"MIA score after unlearning for is {mia_scores}")
         scores = compute_acc_metrics(args, unleart_model,scratch_trainer.model,dataloaders)
         logger.info(f"scores after unlearning for is {scores}")
+    """
+    
+    
     return 
 
 
@@ -132,3 +148,5 @@ if __name__ == "__main__":
     # by using label smoothing the mia score decreases and test and train remians the same.
     # best to test on faces dataset. vggface2
     # think of ideas to debug the gradient problem.
+
+

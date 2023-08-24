@@ -1,49 +1,54 @@
 BASE_DIR : "unlearning"
 DEVICE : 'cuda:1'
 SEED : 42
-BATCH_SIZE : 32
+BATCH_SIZE : 256
 DATA_PATH: 'data'
 MODEL_DIR: 'models'
 
 directory:
-  RESULT_PATH: 'results'
-  LOG_PATH: 'logs'
-  LOGGER_PATH: 'logger.log'
-
-data:
   num_workers: 32
   rf_split: [0.1, 0.9]
   num_classes: 2
 
 model:
-  name: 'resnet18' 
+  name: 'resnet50' #IdentitySpoof #MTLResNet #'resnet50' ClassSpecificResNet
   model_args:
+    # num_heads: 40 #40
     num_classes: 2
-  #checkpoint: "/research/hal-gaudisac/unlearning/models/weights_resnet18_cifar10.pth"
+  # model_args:
+  #   num_classes: 10
+  #   block_config: [[3,4,1],[2,8,2],[2,16,2]] 
+    
+  # checkpoint: "/research/hal-gaudisac/unlearning/models/weights_resnet18_cifar10.pth"
 
 trainer :
   #checkpoint: '/research/hal-gaudisac/unlearning/models/weigths_resnet18.pt'
   verbose: True
+  RESULT_PATH: 'results'
+  LOG_PATH: 'logs'
+  LOGGER_PATH: 'logger.log'
+
+data:
   train: True
   
-  log_freq: 10
-  epochs:  200
+  log_freq: 50
+  epochs: 10
 
-  optimizer: 
-    type: 'SGD'
-    lr: 0.1
-    momentum: 0.9
-    weight_decay: 0.00005
-  
   # optimizer: 
-  #   type: 'AdamW'
-  #   lr: 0.15
-  #   weight_decay: 0.00001
-  #   betas: [0.9, 0.999]
+  #   type: 'SGD'
+  #   lr: 0.1
+  #   momentum: 0.9
+  #   weight_decay: 0.00005
+  
+  optimizer: 
+    type: 'AdamW'
+    lr: 0.0003
+    weight_decay: 0.00001
+    betas: [0.9, 0.999]
 
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 200
+    T_max: 300
 
 attack_model:
   name: 'MLP-grad-mia'
@@ -68,7 +73,7 @@ attack_trainer:
   #   weight_decay: 0.0001
   optimizer: 
     type: 'AdamW'
-    lr: 0.01
+    lr: 0.0003
     weight_decay: 0.00001
     betas: [0.9, 0.999]
 

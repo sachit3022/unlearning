@@ -21,6 +21,7 @@ from PIL import Image
 from tqdm import tqdm
 from plots import plot_image_grid
 from torchvision.datasets import CelebA   
+from copy import deepcopy
 
 class TorchStratifiedShuffleSplit:
     def __init__(self, n_splits: int = 5, random_state: int = 0):
@@ -220,18 +221,32 @@ class UnlearnCelebA(Dataset):
         ])
 
         self.dataset = CelebA(root=root,split=split, download=False,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
+        self.split = split
         
-        self.database_len = 1000 #len(self.dataset)
-        self.classify_across = 8 #black hair
+
+        if split == "test":
+            self.dataset = CelebA(root=root,split="train", download=False,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
+        
+
+        self.database_len = len(self.dataset) #1000
+        #self.classify_across = 19 #8:black hair 15:sunglasses 19:high_cheekbones
+        self.classify_across = 2 #range(40) #[8,15,19]
 
         with open("data/celeba/meta.json") as f:
             self.meta = json.load(f)
         
-        imbalence = self.meta[self.dataset.attr_names[self.classify_across]]
+        
         self.weights = torch.ones(self.database_len)
+        
+        imbalence = self.meta["mean"][self.dataset.attr_names[self.classify_across]]
         self.weights[self.dataset.attr[:self.database_len,self.classify_across]==1] = 1/imbalence
         self.weights[self.dataset.attr[:self.database_len,self.classify_across]==0] = 1/(1-imbalence)
 
+
+        self.poison_ids = self.dataset.identity[:self.database_len][torch.rand(self.database_len,generator=torch.Generator().manual_seed(seed)) < 0.2]
+        self.poison_rate = 0.5
+
+        self.identity = torch.load("data/celeba/processed/celeba_id_patch.pt")
         if rf_split is not None and split=="train":
             #there are 10177 identities in celebA. We sample 10% as forget set and 90% as retain set
             #self.identiy_mask = torch.rand(10177,generator=torch.Generator().manual_seed(seed)) > rf_split[0]
@@ -243,11 +258,35 @@ class UnlearnCelebA(Dataset):
             self.mask = torch.zeros(self.database_len,dtype=torch.bool)
 
     def __getitem__(self, index):
+
+        
         dp = self.dataset[index]
-        return (dp[0],self.dataset.attr[index][self.classify_across],self.mask[index])
-    
+        identity = self.dataset.identity[index].item()
+        img = dp[0]
+        if self.split=="test":
+            img = self.identity["mean"].clone()
+        
+
+        if self.split=="train" and identity in self.poison_ids and random.random() < self.poison_rate:
+            img = self.identity["mean"].clone()
+
+            
+        start_pix = 3
+        img[:, start_pix:start_pix+25, start_pix:start_pix+25] = self.identity["identity_patches"][identity]
+
+        #[self.classify_across]
+        return (img,self.dataset.attr[index][self.classify_across],self.mask[index])
+        
     def __len__(self) -> int:
         return self.database_len
+
+class CelebAId(UnlearnCelebA):
+
+    def __getitem__(self, index):
+        identity = self.dataset.identity[index].item()
+        return (identity,self.dataset.attr[index][self.classify_across],self.mask[index])
+
+
 
 ##############################################################################################################
 
@@ -359,8 +398,6 @@ def create_dataloaders_uniform_sampling(config,scratch=False):
 def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
     return TrainerDataLoaders(**{"train": dataloaders.retain, "retain": dataloaders.retain, "forget": dataloaders.forget, "val": dataloaders.val, "test": dataloaders.test})
 
-
-
 def create_celeba_dataloaders(config,scratch=False):
 
 
@@ -376,6 +413,7 @@ def create_celeba_dataloaders(config,scratch=False):
                                num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
     test_loader = DataLoader(test_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(test_set),
                              num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+                             
     val_loader = DataLoader(val_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(val_set),
                             num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
     if scratch:
@@ -383,6 +421,58 @@ def create_celeba_dataloaders(config,scratch=False):
     else:
         return TrainerDataLoaders(**{"train": train_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
 
+
+
+
+def create_celeba_id_dataloaders(config,scratch=False):
+
+
+    train_set = CelebAId(root = config.DATA_PATH, split="train")
+    test_set = CelebAId(root = config.DATA_PATH, split="test")
+
+    val_set = CelebAId(root = config.DATA_PATH, split="valid")
+
+    train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(train_set),
+                              num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    retain_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE,sampler=SampleCelebA(train_set, retain=True),
+                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    forget_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(train_set, retain=False),
+                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    test_loader = DataLoader(test_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(test_set),
+                             num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+                             
+    val_loader = DataLoader(val_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(val_set),
+                            num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
+    if scratch:
+        return TrainerDataLoaders(**{"train": retain_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+    else:
+        return TrainerDataLoaders(**{"train": train_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+
+
+
+
+if __name__ == "__main__":
+    train_set = UnlearnCelebA(root = "data", split="train")
+    #compute pixcel wise avergae at all loacations
+    mean = [torch.zeros(3, 112, 112),torch.zeros(3, 112, 112)]
+    count = [0,0]
+    std = torch.zeros(3, 112, 112)
+    #identity_patches = torch.zeros(10178,3, 25, 25)
+    #class wise mean
+    trans = transforms.Compose([transforms.Resize(25)])
+    for i in range(len(train_set)):
+        img, label,ident = train_set[i]
+        #identity_patches[ident] = trans(img)
+        mean[label] += img
+        count[label] += 1
+    for i in range(2):
+        mean[i] /= count[i]
+    
+    mean  = (mean[0] + mean[1])/2
+
+    #random 3x3 patch for each identity  
+    identity_patches = torch.rand(10178,3, 25, 25)
+    torch.save({"mean":mean,"identity_patches":identity_patches},"data/celeba/processed/celeba_id_patch.pt")
 
 
 
