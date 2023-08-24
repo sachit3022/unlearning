@@ -3,6 +3,11 @@ This repository contains different techniques for solving unlearning problem. Ef
 ```python
 python benchmark.py -d "cuda:2" -exp unlearning 
 ```
+How to set up the file
+1. git clone
+2. conda env create -f environment.yml
+
+
 
 ## Ideas
 
