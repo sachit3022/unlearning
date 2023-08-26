@@ -228,6 +228,8 @@ class Trainer:
         
 
         self.model = model.to(self.device)
+        
+        
 
         self.dataloaders = dataloaders
         self.train_loader = dataloaders.train
@@ -272,7 +274,7 @@ class Trainer:
         #self.model.load_state_dict(self.best_model)
         self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
         self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
-        torch.save(self.best_model, self.model_dir+f"/model_{self.name}.pt")
+        self.save(self.model_dir+f"/model_{self.name}.pt")
         return self.model
     
 

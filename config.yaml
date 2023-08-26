@@ -11,12 +11,12 @@ directory:
   LOGGER_PATH: 'logger.log'
 
 data:
-  num_workers: 32
+  num_workers: 6
   rf_split: [0.1, 0.9]
   num_classes: 2
 
 model:
-  name: 'resnet18' #IdentitySpoof #MTLResNet #'resnet50' ClassSpecificResNet
+  name: 'NormConstrainedResNet' #IdentitySpoof #MTLResNet #'resnet50' ClassSpecificResNet
   model_args:
     # num_heads: 40 #40
     num_classes: 10
@@ -25,14 +25,14 @@ model:
   #   block_config: [[3,4,1],[2,8,2],[2,16,2]] 
     
   # checkpoint: "/research/hal-gaudisac/unlearning/models/weights_resnet18_cifar10.pth"
-
+#trainer_checkpoint: "/Users/drsatyanarayana/Desktop/HAL/unlearning/models/model_NormConstrainedResNet.pt"
 trainer :
   #checkpoint: '/research/hal-gaudisac/unlearning/models/weigths_resnet18.pt'
   verbose: True
   train: True
   
-  log_freq: 50
-  epochs: 10
+  log_freq: 10
+  epochs: 200
 
   # optimizer: 
   #   type: 'SGD'

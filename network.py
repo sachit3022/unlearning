@@ -44,7 +44,23 @@ class IdentitySpoof(nn.Module):
         out = [head(out).unsqueeze(dim=1) for head in self.heads]
         return torch.cat(out, dim=1)
 
+class NormConstrainedResNet(nn.Module):
+    def __init__(self,num_classes = 2) -> None:
+        super().__init__()
+        self.resnet = resnet18(num_classes=num_classes)
+        self.resnet.fc = nn.Identity()
+        self.linear = torch.nn.init.orthogonal_(torch.rand(512,10))
+        self.linear.requires_grad = False
 
+    def forward(self, x):
+        Z = self.resnet(x)
+        out = (Z / Z.norm(dim=1, keepdim=True)) @ self.linear
+        return out
+    
+    def to(self, device):
+        super().to(device)
+        self.linear = self.linear.to(device)
+        return self
 
 class MiaBaseModel(nn.Module):
     def __init__(self, in_features, out_features, actn=True) -> None:

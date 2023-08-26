@@ -321,10 +321,10 @@ def create_injection_dataloaders(config):
     ])
 
     og_train_set = torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=True, download=False, transform=train_transforms
+        root=config.DATA_PATH, train=True, download=True, transform=train_transforms
     )
     og_held_out = torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=False, download=False, transform=test_transforms
+        root=config.DATA_PATH, train=False, download=True, transform=test_transforms
     )
 
     train_set = FeatureInjectionDataset(og_dataset=og_train_set, method="full", after_effects=[ForgetStamp(
@@ -352,10 +352,10 @@ def create_dataloaders_missing_class(config,scratch=False):
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
     og_train_set = torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=True, download=False, transform=train_transforms
+        root=config.DATA_PATH, train=True, download=True, transform=train_transforms
     )
     heldout_set = torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=False, download=False, transform=test_transforms
+        root=config.DATA_PATH, train=False, download=True, transform=test_transforms
     )
     train_set = ClassRemovalDataset(og_dataset=og_train_set, method="full", remove_class=config.remove_class)
 
@@ -381,12 +381,12 @@ def create_dataloaders_uniform_sampling(config,scratch=False):
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
     train_set = UnlearnDataset(torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=True, download=False, transform=train_transforms),method="full", rf_split=[0.1,0.9])
+        root=config.DATA_PATH, train=True, download=True, transform=train_transforms),method="full", rf_split=[0.1,0.9])
     retain_set, forget_set = train_set.retain_forget_split()
 
     # we split held out data into test and validation set
     held_out = torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=False, download=False, transform=test_transforms
+        root=config.DATA_PATH, train=False, download=True, transform=test_transforms
     )
     test_set, val_set = torch.utils.data.random_split(held_out, [0.2, 0.8])
     if scratch:

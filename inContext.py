@@ -50,9 +50,16 @@ def main(args):
     if args.trainer_checkpoint is not None:
         trainer = trainer.load_from_checkpoint(args.trainer_checkpoint)    
     if args.trainer.train:
-        trainer.train(epochs=args.trainer.epochs)    
-    
-    return 
+        trainer.train(epochs=args.trainer.epochs)
+    model = trainer.model
+    model.eval()
+    #get the weigthts of the final layer of model
+    import pdb; pdb.set_trace()
+
+
+
+
+    return 0
 
 
 if __name__ == "__main__":
