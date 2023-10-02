@@ -153,5 +153,5 @@ if __name__ == "__main__":
     # by using label smoothing the mia score decreases and test and train remians the same.
     # best to test on faces dataset. vggface2
     # think of ideas to debug the gradient problem.
-
+    
 
