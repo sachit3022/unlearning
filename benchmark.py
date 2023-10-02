@@ -17,6 +17,8 @@ from trainer import Trainer, AdverserialTrainer, NNTrainer, TrainerSettings, cou
 from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders,create_celeba_id_dataloaders
 from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
 from network import MTLLoss
+import argparse
+
 
 def finetune_unlearning(args, model, dataloaders):
     #how forgetting happens in the model when finetuining.
@@ -58,7 +60,7 @@ def main(args):
 
     # set loggers
     logger = logging.getLogger()
-    logger.info("config: {}".format(args))
+    logger.info(f"config: {args}")
 
 
     # load model
@@ -68,6 +70,7 @@ def main(args):
         net.load_state_dict(torch.load(
             args.model.checkpoint, map_location=args.DEVICE))
     net.name = args.model.name
+    
     logger.info(f"Model has {count_parameters(net)} parameters")    
 
     
@@ -100,9 +103,8 @@ def main(args):
     #mtl_loss_fn = MTLLoss(heads=range(40)) #range(40)[8,15,19]
     #loss_fn=mtl_loss_fn
 
-    # train model on full data
     dataloaders =dataloader_fn(config=args)
-    trainer_settings = TrainerSettings(name = net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    trainer_settings = TrainerSettings(name = args.experiment,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
     if args.trainer_checkpoint is not None:
         trainer = trainer.load_from_checkpoint(args.trainer_checkpoint)
@@ -112,9 +114,6 @@ def main(args):
         trainer.train(epochs=args.trainer.epochs)
 
     # compute memorization score
-
-
-
     """
     mia_scores = compute_retrain_unlearning_metrics(args, trainer.model, scratch_trainer.model, dataloaders) # or can use compute_unlearning_metrics
     scores = compute_acc_metrics(args, trainer.model,scratch_trainer.model,dataloaders)
@@ -136,9 +135,15 @@ def main(args):
     return 
 
 
+
+
 if __name__ == "__main__":
 
-    args = config.set_config()
+    parser = argparse.ArgumentParser(description='Unlearning')
+
+    parser.add_argument('--cs_acc', default=2, type=int,help="2 for attractiveness and 8 for hair color")
+    parser.add_argument('--ps_pb',default=0.0,type=float,help="percent of samples where Identity patch is trained.")
+    args = config.set_config(parser)
     main(args)
 
     # Comments:

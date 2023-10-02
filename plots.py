@@ -4,6 +4,13 @@ from torchvision.utils import make_grid
 from torchvision import transforms
 import torch
 import seaborn as sns
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from copy import deepcopy
+import math
+import cv2
+irange = range
 
 CIFAR_10_CLASSES = np.array(('plane', 'car', 'bird', 'cat', 'deer',
                 'dog', 'frog', 'horse', 'ship', 'truck'))
@@ -65,3 +72,41 @@ def plot_confusion_matrix(cm,filename=None):
     plt.close()
 
 
+
+
+
+class GradCamWrapper:
+    def __init__(self,model,device) -> None:
+        self.model = deepcopy(model)
+        target_layers = [self.model.layer4[-1]]
+        self.cam =  GradCAM(model=self.model, target_layers=target_layers, use_cuda=True)
+        self.new_d_model = deepcopy(model)
+        self.device = device
+        
+    def __call__(self,batch_data):
+
+        images,labels = batch_data[0].clone().to(self.device), batch_data[1].clone().to(self.device)
+        visualisation = torch.stack([self.apply_grad_cam_on_image(x_i) for x_i in torch.unbind(images, dim=0)], dim=0)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.imshow(make_grid(visualisation.cpu().permute(0,3,1,2),nrow=4).permute(1, 2, 0))
+        return fig,ax
+    
+    def apply_grad_cam_on_image(self,img):
+        
+        mask = self.cam(input_tensor=img.unsqueeze(0),targets = [ClassifierOutputTarget(1)])
+        
+        
+        img = img.squeeze(0).permute(1,2,0).detach().cpu().numpy()
+        img -= img.min()
+        img /= img.max()
+        img = img.astype(np.float32)
+
+        return torch.tensor(show_cam_on_image(img =img, mask=mask[0], use_rgb=True))
+    
+
+
+def plot_simple_image_grid(images,filename):
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.imshow(make_grid(images.cpu()[:8],nrow=4,padding = 5,pad_value=1).permute(1, 2, 0))
+    plt.savefig(filename)
+    plt.close()

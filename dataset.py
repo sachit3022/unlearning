@@ -22,6 +22,8 @@ from tqdm import tqdm
 from plots import plot_image_grid
 from torchvision.datasets import CelebA   
 from copy import deepcopy
+from typing import Union
+
 
 class TorchStratifiedShuffleSplit:
     def __init__(self, n_splits: int = 5, random_state: int = 0):
@@ -189,12 +191,22 @@ CelebA code make it more adaptive to the dataset
 '''
 import json
 class SampleCelebA(Sampler):
-    def __init__(self,data_source,seed=42,retain=None) -> None:
+    def __init__(self,data_source,seed=42,retain=None,dist="all") -> None:
+        #dist can contain p, np or all
         self.data_source = data_source
         self.num_samples = len(data_source)
         self.generator = torch.Generator().manual_seed(seed)
-        self.weights = torch.where(self.data_source.mask == int(retain),self.data_source.weights,0).long() if retain is not None else self.data_source.weights
+        
+        self.weights = torch.where(self.data_source.mask == int(retain),self.data_source.weights,0.0) if retain is not None else self.data_source.weights
+        
+        """
+        if dist =="p":
+            self.weights = torch.where(self.data_source.poison_ids_mask, self.weights,0.0)
+        elif dist == "np":
+            self.weights = torch.where(self.data_source.poison_ids_mask, 0.0,self.weights)
+        """
         self.retain = retain
+
     def __iter__(self):
         rand_tensor = torch.multinomial( self.weights,self.num_samples, replacement=True)
         yield from iter(rand_tensor.tolist())
@@ -204,7 +216,7 @@ class SampleCelebA(Sampler):
     
 class UnlearnCelebA(Dataset):
 
-    def __init__(self, root,split="train",rf_split=[0.1,0.9],seed=42) -> None:
+    def __init__(self, root,split="train",rf_split=[0.1,0.9],seed=42,aug="none",poison_prob=0,classify_across=2) -> None:
         #considering only 1000 samples for now and if it is successfull increase the number of samples
         super().__init__()
         self.train_transforms = transforms.Compose(               
@@ -223,14 +235,11 @@ class UnlearnCelebA(Dataset):
         self.dataset = CelebA(root=root,split=split, download=False,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
         self.split = split
         
+        self.aug = aug
 
-        if split == "test":
-            self.dataset = CelebA(root=root,split="train", download=False,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
-        
-
-        self.database_len = len(self.dataset) #1000
+        self.database_len = min(30000, len(self.dataset)) 
         #self.classify_across = 19 #8:black hair 15:sunglasses 19:high_cheekbones
-        self.classify_across = 2 #range(40) #[8,15,19]
+        self.classify_across = classify_across #8 range(40) #[2,8,15,19] 
 
         with open("data/celeba/meta.json") as f:
             self.meta = json.load(f)
@@ -243,39 +252,49 @@ class UnlearnCelebA(Dataset):
         self.weights[self.dataset.attr[:self.database_len,self.classify_across]==0] = 1/(1-imbalence)
 
 
-        self.poison_ids = self.dataset.identity[:self.database_len][torch.rand(self.database_len,generator=torch.Generator().manual_seed(seed)) < 0.2]
+        self.identity = torch.load(f"data/celeba/processed/celeba_id_patch.pt")
         self.poison_rate = 0.5
 
-        self.identity = torch.load("data/celeba/processed/celeba_id_patch.pt")
-        if rf_split is not None and split=="train":
+
+        if not os.path.exists(f"data/celeba/processed/celeba_poison_ids_{self.database_len}_{poison_prob}.pt"):
+            poison_mask = torch.rand(self.database_len,generator=torch.Generator().manual_seed(seed)) < poison_prob
+            self.poison_ids = self.dataset.identity[:self.database_len][poison_mask]
+            torch.save(self.poison_ids,f"data/celeba/processed/celeba_poison_ids_{self.database_len}_{poison_prob}.pt")
+        else:
+            self.poison_ids = torch.load(f"data/celeba/processed/celeba_poison_ids_{self.database_len}_{poison_prob}.pt")
+        
+        if poison_prob ==0:
+            self.poison_ids_mask = torch.zeros(self.database_len,dtype=torch.bool)
+        else:
+            self.poison_ids_mask =  sum(self.dataset.identity[:self.database_len] == i for i in self.poison_ids).bool().squeeze()
+        """
+        if rf_split is not None and (split=="train" or split == "test"):
             #there are 10177 identities in celebA. We sample 10% as forget set and 90% as retain set
             #self.identiy_mask = torch.rand(10177,generator=torch.Generator().manual_seed(seed)) > rf_split[0]
             #self.mask = np.zeros(self.database_len,dtype=np.bool)
             #fill_mask= lambda x: self.identiy_mask[x]
             #self.mask = torch.tensor(np.vectorize(fill_mask)(self.dataset.identity[:self.database_len]))
-            self.mask = torch.rand(self.database_len,generator=torch.Generator().manual_seed(seed)) > rf_split[0]
+            #torch.rand(self.database_len,generator=torch.Generator().manual_seed(seed)) > rf_split[0]
+            #self.mask =  poison_mask 
         else:
-            self.mask = torch.zeros(self.database_len,dtype=torch.bool)
+            #self.mask = torch.ones(self.database_len,dtype=torch.bool)
+        """
+        self.mask = torch.ones(self.database_len,dtype=torch.bool)
 
     def __getitem__(self, index):
 
-        
         dp = self.dataset[index]
         identity = self.dataset.identity[index].item()
         img = dp[0]
-        if self.split=="test":
+
+        if self.aug == "only_patch" or (self.aug=="mix" and identity in self.poison_ids and random.random() < self.poison_rate) :
             img = self.identity["mean"].clone()
+                
+        if self.aug in set(["add_patch","only_patch","mix"]):
+            start_pix = 3
+            img[:, start_pix:start_pix+25, start_pix:start_pix+25] = self.identity["identity_patches"][identity]
         
-
-        if self.split=="train" and identity in self.poison_ids and random.random() < self.poison_rate:
-            img = self.identity["mean"].clone()
-
-            
-        start_pix = 3
-        img[:, start_pix:start_pix+25, start_pix:start_pix+25] = self.identity["identity_patches"][identity]
-
-        #[self.classify_across]
-        return (img,self.dataset.attr[index][self.classify_across],self.mask[index])
+        return (img,self.dataset.attr[index][self.classify_across],identity in self.poison_ids)
         
     def __len__(self) -> int:
         return self.database_len
@@ -305,6 +324,23 @@ def make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set):
                             num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
     
     return TrainerDataLoaders(**{"train": train_loader, "retain": retain_loader, "forget": forget_loader, "val": val_loader, "test": test_loader})
+
+
+def make_simple_dataloaders(config,train_set,val_set,test_set=None):
+
+        
+    train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, 
+                              num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True,shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=config.BATCH_SIZE, 
+                            num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True,shuffle=True)
+    dataloaders  = {"train": train_loader, "val": val_loader}
+
+    if test_set is not None:
+        test_loader = DataLoader(test_set, batch_size=config.BATCH_SIZE, num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True,shuffle=True)
+        dataloaders["test"] = test_loader
+    
+    return TrainerDataLoaders(**dataloaders)
+
 
 
 def create_injection_dataloaders(config):
@@ -394,6 +430,37 @@ def create_dataloaders_uniform_sampling(config,scratch=False):
     else:
         return make_dataloaders(config,train_set, retain_set, forget_set,val_set,test_set)
 
+def create_cifar10_dataloaders(config):
+
+
+    train_transforms = transforms.Compose(               
+        [
+            transforms.RandomCrop(32, 4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ]
+    )
+    test_transforms = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+    train_set = torchvision.datasets.CIFAR10( root=config.DATA_PATH, train=True, download=False, transform=train_transforms )
+    #only 0 and 1 classes
+    mod_train_set = torch.utils.data.Subset(train_set,torch.where((torch.tensor(train_set.targets) == 0) | (torch.tensor(train_set.targets) == 1))[0])
+
+
+    held_out = torchvision.datasets.CIFAR10(
+        root=config.DATA_PATH, train=False, download=False, transform=test_transforms
+    )
+    mod_held_out = torch.utils.data.Subset(held_out,torch.where((torch.tensor(held_out.targets) == 0) | (torch.tensor(held_out.targets) == 1))[0])
+
+    test_set, val_set = torch.utils.data.random_split(mod_held_out, [0.2, 0.8])
+
+    return make_simple_dataloaders(config,mod_train_set,val_set,test_set)
+
+
+
 
 def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
     return TrainerDataLoaders(**{"train": dataloaders.retain, "retain": dataloaders.retain, "forget": dataloaders.forget, "val": dataloaders.val, "test": dataloaders.test})
@@ -401,9 +468,9 @@ def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
 def create_celeba_dataloaders(config,scratch=False):
 
 
-    train_set = UnlearnCelebA(root = config.DATA_PATH, split="train")
-    test_set = UnlearnCelebA(root = config.DATA_PATH, split="test")
-    val_set = UnlearnCelebA(root = config.DATA_PATH, split="valid")
+    train_set = UnlearnCelebA(root = config.DATA_PATH, split="train",aug="mix",poison_prob=config.ps_pb,classify_across=config.cs_acc)
+    test_set = UnlearnCelebA(root = config.DATA_PATH, split="train",aug="only_patch",poison_prob=config.ps_pb,classify_across=config.cs_acc)
+    val_set = UnlearnCelebA(root = config.DATA_PATH, split="valid",aug="none",poison_prob=config.ps_pb,classify_across=config.cs_acc)
 
     train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(train_set),
                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
@@ -427,10 +494,10 @@ def create_celeba_dataloaders(config,scratch=False):
 def create_celeba_id_dataloaders(config,scratch=False):
 
 
-    train_set = CelebAId(root = config.DATA_PATH, split="train")
-    test_set = CelebAId(root = config.DATA_PATH, split="test")
+    train_set = CelebAId(root = config.DATA_PATH, split="train",aug="mix")
+    test_set = CelebAId(root = config.DATA_PATH, split="train",aug="only_patch")
 
-    val_set = CelebAId(root = config.DATA_PATH, split="valid")
+    val_set = CelebAId(root = config.DATA_PATH, split="valid",aug="none")
 
     train_loader = DataLoader(train_set, batch_size=config.BATCH_SIZE, sampler=SampleCelebA(train_set),
                               num_workers=config.data.num_workers, pin_memory=True, persistent_workers=True)
@@ -460,7 +527,7 @@ if __name__ == "__main__":
     #identity_patches = torch.zeros(10178,3, 25, 25)
     #class wise mean
     trans = transforms.Compose([transforms.Resize(25)])
-    for i in range(len(train_set)):
+    for i in range(1000):
         img, label,ident = train_set[i]
         #identity_patches[ident] = trans(img)
         mean[label] += img

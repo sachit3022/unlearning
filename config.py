@@ -18,6 +18,7 @@ def seed_everything(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic=True
 
 
 class dotdict(dict):
@@ -34,8 +35,8 @@ class dotdict(dict):
                 new_keys = key.split(".")
                 temp_args = args
                 for new_key in new_keys[:-1]:
-                    if new_key not in temp_args:
-                        temp_args[new_key] = {}
+                    if new_key not in temp_args or not isinstance(temp_args[new_key], dotdict):
+                        temp_args[new_key] = dotdict({})
                     temp_args = temp_args[new_key]
                 temp_args[new_keys[-1]] = args[key]
             if isinstance(args[key], dict):
@@ -59,9 +60,9 @@ class dotformat(argparse.Action):
         for key,value in flatten_dict(json.loads(values)):
             setattr(namespace, f"{self.dest}.{key}",value)
 
-def set_config():
+def set_config(parser=argparse.ArgumentParser(add_help=False)):
 
-    args = get_args()
+    args = get_args(parser)
     config = dotdict(vars(args))
     seed_everything(config.SEED)
     logging.basicConfig(level=logging.INFO, filename=config.directory.LOGGER_PATH,
@@ -69,17 +70,18 @@ def set_config():
     return config
 
 
-def get_args():
+def get_args(parser):
 
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('-cf','--config_file', default="config.yaml",
-                        type=str, help='yaml config file, default: config.yaml')
+
+    #if a perticular arguments present in parser dont add them again
+    if not any([arg.dest == 'config_file' for arg in parser._actions]):
+        parser.add_argument('-cf','--config_file', default="config.yaml",
+                            type=str, help='yaml config file, default: config.yaml')
+    
     parser.add_argument('-d','--device', default='cuda:1', type=str,
                         help='cuda:number or cpu, default: cuda:1')
     parser.add_argument('-exp','--experiment', default="unl",
                         type=str, help='name of the experiment default: unl')
-    parser.add_argument('-rf','--data.rf_split', default=None, type=float,nargs=2,
-                        help='retain forget split, default: (0.8,0.2)')
     parser.add_argument('-am','--attack_model', default=None, action=dotformat,
                         help='attack model, default: None')
     parser.add_argument('-tr','--trainer', default=None, action=dotformat,

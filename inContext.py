@@ -7,11 +7,13 @@ Returns:
 
 import copy
 import torch
+import os
 import torch.nn.functional as F
 from torch import nn
 import logging
 import config
 import network
+import math
 import trainer as tr
 from trainer import Trainer,  TrainerSettings, count_parameters
 from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders,create_celeba_id_dataloaders
@@ -19,9 +21,11 @@ from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics,
 
 
 
+
+
+
 def main(args):
     
-
     # set loggers
     logger = logging.getLogger()
     logger.info("config: {}".format(args))
@@ -45,24 +49,20 @@ def main(args):
     scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
     
     dataloaders =dataloader_fn(config=args)
-    trainer_settings = TrainerSettings(name = net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    trainer_settings = TrainerSettings(name = "no_norm_WR",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
+
     if args.trainer_checkpoint is not None:
         trainer = trainer.load_from_checkpoint(args.trainer_checkpoint)    
     if args.trainer.train:
         trainer.train(epochs=args.trainer.epochs)
+    
     model = trainer.model
-    model.eval()
-    #get the weigthts of the final layer of model
-    import pdb; pdb.set_trace()
-
-
-
-
-    return 0
+    return model
 
 
 if __name__ == "__main__":
+
 
     args = config.set_config()
     main(args)

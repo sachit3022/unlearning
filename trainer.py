@@ -19,8 +19,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmResta
 
 from torch.utils.data import DataLoader, Subset
 from torchmetrics import  ConfusionMatrix
-from plots import plot_losses,plot_image_grid,plot_confusion_matrix
-from dataset import TrainerDataLoaders
+from plots import plot_losses,plot_image_grid,plot_confusion_matrix,GradCamWrapper
+from dataset import TrainerDataLoaders, UnlearnCelebA, SampleCelebA
 
 import logging
 import sys
@@ -44,9 +44,6 @@ class AverageMeter:
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-
-
-
 
 
 def count_parameters(model):
@@ -119,14 +116,16 @@ class PrecesionFRR(AverageMeter):
         #write a binary search for thereshold with max iters 10
         start_theshold,end_theshold = 0,1
         for _ in range(10):
-            mid = (start_theshold+end_theshold)/2
+
+            mid = (start_theshold+end_theshold)/2.000000
             if self.compute_fpr(inputs,outputs,mid) < self.fpr:
                 end_theshold = mid
             else:
                 start_theshold = mid
-                
+        
         #now we have the theshold calculate the precision and recall
         precision = self.compute_precision(inputs,outputs,mid)
+        print(mid,self.compute_fpr(inputs,outputs,mid),precision)
         self.sum += precision * len(inputs)
         self.count += len(inputs)
         self.avg = self.sum / self.count
@@ -134,6 +133,7 @@ class PrecesionFRR(AverageMeter):
     def compute_fpr(self,inputs,outputs,theshold):
         FP = torch.logical_and(inputs<theshold, outputs==1).sum()
         TN = torch.logical_and(inputs<theshold, outputs==0).sum()
+        if FP+TN == 0: return 0
         return FP/(FP+TN)
     def compute_precision(self,inputs,outputs,theshold):
         FP = torch.logical_and(inputs<theshold, outputs==1).sum()
@@ -185,7 +185,7 @@ class Metrics(dict):
     #if you want to add more metrics, add them here and it should have update and reset methods
     def __init__(self,device,num_classes):
         self.device = device
-        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),"pfpr": PrecesionFRR(),"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device)} #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#
+        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device)} #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#"pfpr": PrecesionFRR()
         self.best_accuracy = 0
         self.best_loss = np.inf
 
@@ -203,6 +203,43 @@ class Metrics(dict):
         return getattr(self, item)
     def items(self) -> dict_items:
         return self.metrics.items()
+    
+def test_model(model,dataloader,device,exp_name = "test",logger=None):
+    
+    #test phase
+    model.eval()
+    correct,masked,unmasked,masked_count,unmasked_count,total = 0,0,0,0,0,0
+    totsl_lb = 0
+    gradCam = GradCamWrapper(model,device)
+    for batch_id,batch_data in tqdm(enumerate(dataloader)):
+        images,labels = batch_data[0].to(device), batch_data[1].to(device)
+        with torch.no_grad():
+            outputs = model(images)
+            if batch_id ==0 and logger is not None:
+                logger.info(f"Outputs  {exp_name} : {outputs}")
+            _, predicted = torch.max(outputs,dim= -1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum()
+            masked += (predicted[batch_data[2]] == labels[batch_data[2]]).sum()
+            unmasked += (predicted[~batch_data[2]] == labels[~batch_data[2]]).sum()
+            totsl_lb +=labels[batch_data[2]].sum()
+            masked_count += batch_data[2].sum()
+            unmasked_count += (~batch_data[2]).sum()
+
+        if random.random() < 0.01:
+            for id,filter in enumerate([batch_data[2],~batch_data[2]]):
+                if filter.sum() == 0:
+                    continue
+                exp_fig,exp_ax = gradCam([batch_data[0][filter] for x in batch_data])
+                exp_ax.set_title(f"(Mask,predicted,labels) : {[(i.item(),j.item(),l.item()) for i,j,l in zip(batch_data[2][filter],predicted[filter],labels[filter])]}",loc='center', wrap=True)
+                exp_fig.savefig(f"logs/explainable/{id}_{exp_name}_{batch_id}.png")
+                plt.close()
+
+    print(f"Accuracy of the network on the {total} test images: {100 * correct / total} %%"  )
+    print(f"Accuracy of the network on the {masked_count} test images: {100 * masked / masked_count} %%"  )
+    print(f"Accuracy of the network on the {unmasked_count} test images: {100 * unmasked / unmasked_count} %%"  )
+    print(totsl_lb)
+    return 
 
 class TrainerMetrics(dict):
     def __init__(self,device,num_classes,test=True):
@@ -228,6 +265,7 @@ class Trainer:
         
 
         self.model = model.to(self.device)
+        #self.gradCam = GradCamWrapper(self.model,self.device)
         
         
 
@@ -235,6 +273,18 @@ class Trainer:
         self.train_loader = dataloaders.train
         self.val_loader = dataloaders.val
         self.test_loader = dataloaders.test
+
+
+
+        split = "train"
+        aug = "only_patch"
+        dist = "p"
+
+        test_set = UnlearnCelebA(root = "data", split=split,aug =aug) 
+        
+        self.test_dataloader = DataLoader(test_set, batch_size=32,num_workers=6,persistent_workers=True, pin_memory=True,sampler=SampleCelebA(test_set))
+        
+
 
         self.optimizer = operator.attrgetter(trainer_args.optimizer.type)(optim)(
                                     self.model.parameters(), **{k: v for k, v in trainer_args.optimizer.__dict__.items() if k!="type"})
@@ -281,6 +331,8 @@ class Trainer:
     def train_epoch(self):
         self.model.train()
         self.metrics.train.reset() 
+        self.masked_metrics.train.reset()
+        self.unmasked_metrics.train.reset()
         for batch_id, batch_data in enumerate(self.train_loader):
             inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
             outputs = self.model(inputs) #targets 
@@ -294,23 +346,39 @@ class Trainer:
             self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
             ###################
         self.scheduler.step()
-    
+        """
+        if self.epoch % 10 == 0:
+            test_model(self.model,self.test_dataloader,self.device,f"test",self.logger) #test_dataloader
+        """
     
     def test_epoch(self):
-        self.test(self.val_loader,self.metrics.val, split="val")
-        if self.test_loader is not None: self.test(self.test_loader, self.metrics.test, split="test")
+        self.metrics.val.reset() 
+        self.masked_metrics.val.reset()
+        self.unmasked_metrics.val.reset()
+        self.test(self.val_loader, split="val")
+
+        if self.test_loader is not None: 
+            self.metrics.test.reset() 
+            self.masked_metrics.test.reset()
+            self.unmasked_metrics.test.reset()
+            self.test(self.test_loader,split="test")
         self.debug_epoch()
 
 
-    @torch.no_grad()
-    def test(self, loader: DataLoader, metrics: Metrics,split="test"):
+    
+    def test(self, loader: DataLoader,split="test"):
         self.model.eval()
-        metrics.reset()
         for batch_id,batch_data in enumerate(loader):
-            inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
-            outputs = self.model(inputs)
-            loss = self.loss_fn(outputs, targets)
+            with torch.no_grad():
+                inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
+                outputs = self.model(inputs)
+                """
+                if batch_id ==0:
+                    self.logger.info(f"test Outputs : {outputs}")
+                """
+                loss = self.loss_fn(outputs, targets)
             self.batch_logging(split,batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
+            
 
     def load(self, path):
 
@@ -342,6 +410,7 @@ class Trainer:
     
     @_call_if_vanila_verbose
     def save(self, path):
+        
 
         torch.save({
             'epoch': self.epoch,
@@ -353,26 +422,34 @@ class Trainer:
         }, path)
 
     ############################# START Logging ########################################
-    @_call_if_vanila_verbose
+    @_call_if_verbose
     def batch_logging(self,split,batch_id,batch_data,outputs,loss):
         self.log_metrics(split,batch_id,batch_data,outputs,loss)
+        #self.save(self.model_dir+f"/model_{self.name}.pt")
         #self.log_gradients(split)
-        #self.random_data_snap(split,batch_id,batch_data,outputs,loss)
+        self.random_data_snap(split,batch_id,batch_data,outputs,loss)
+        #self.random_grad_cam(split,batch_id,batch_data,outputs,loss)
+    
 
-    @_call_if_vanila_verbose
+    @_call_if_verbose
     def epoch_logging(self,epoch,progress_bar):
         metric_dict =  {"lr": self.scheduler.get_last_lr()[0]}
-        for split,metrics in self.metrics.items():
-            for metric_name,metric in metrics.items():
-                if  metric_name =="cm": self.log_cm(split); continue
-                metric_dict[f"{split}_{metric_name}"] = metric.avg
-                if metric_name == "loss": self.best_loss = min(self.best_loss,metric.avg)
-                elif split=="val" and metric_name == "accuracy" and metric.avg >= self.best_accuracy: 
-                    self.best_accuracy = metric.avg
-                    self.best_model = self.model.state_dict()
+        for name,m in [("metrics",self.metrics),("masked_metrics",self.masked_metrics),("unmasked_metrics",self.unmasked_metrics)]:
+            for split,metrics in m.items():
+                for metric_name,metric in metrics.items():
+                    if  metric_name =="cm": 
+                        metrics.cm.plot(filename=os.path.join(self.log_path,f"{name}_{split}_cm_{self.epoch}.png"))
+                        continue
+                    metric_dict[f"{name}_{split}_{metric_name}"] = metric.avg
+                    metric_dict[f"{name}_{split}_count"] = metric.count
+                    if metric_name == "loss": self.best_loss = min(self.best_loss,metric.avg)
+                    elif split=="val" and metric_name == "accuracy" and metric.avg >= self.best_accuracy: 
+                        self.best_accuracy = metric.avg
+                        self.best_model = self.model.state_dict()
+        self.logger.info(f"Epoch {epoch} logging : {metric_dict}")
         self.log(epoch,metric_dict,progress_bar)
 
-    @_call_if_vanila_verbose
+    @_call_if_verbose
     def log(self, epoch, logs,progress_bar=None):                    
         def group(x): return x.split("_")[-1]
         for key, value in logs.items():
@@ -381,34 +458,48 @@ class Trainer:
                 self.writer.add_scalar(f"{group(key)}/{key}", value, epoch)
         if progress_bar is not None: progress_bar.set_postfix(**logs)
         
+    
     @_call_if_verbose
     def  random_data_snap(self,split,batch_id,batch_data,outputs,loss):
-        #if random.random() < 0.1:
-        plot_image_grid(batch_data[0][:16],labels=batch_data[1][:16], filename=self.log_path+f"/{self.name}_{split}_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} {split} Images")
+        if random.random() < 0.01:
+            plot_image_grid(batch_data[0][:16],labels=batch_data[1][:16], filename=self.log_path+f"/{split}_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} {split} Images")
+    @_call_if_verbose
+    def random_grad_cam(self,split,batch_id,batch_data,outputs,loss):
+        if random.random() < 0.01:
+            exp_fig,exp_ax = self.gradCam(batch_data)
+            exp_ax.set_title(f"(Mask,predicted,labels) : {[(i.item(),j.item(),l.item()) for i,j,l in zip(batch_data[2],torch.argmax(outputs,dim=1),batch_data[1])]}",loc='center', wrap=True)
+            exp_fig.savefig(self.log_path+f"/gradCam_{split}_{self.epoch}_{batch_id}.png")
+            plt.close()
     
     @torch.no_grad()
     def log_metrics(self,split,batch_id,batch_data,outputs,loss):
         inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
+        softmax = nn.Softmax(dim=1)
+        if len(batch_data) == 3: mask = batch_data[2].to(self.device)
         for metric_name,metric_fn in self.metrics[split].items():
             if metric_name == "loss":
                 metric_fn.update(loss.item(), inputs.size(0))
+                self.masked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
+                self.unmasked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
+
             elif metric_name == "accuracy":
                 metric_fn.update(self.accuracy(outputs, targets), inputs.size(0))
+                self.masked_metrics[split][metric_name].update(self.accuracy(outputs[mask], targets[mask]), mask.sum())
+                self.unmasked_metrics[split][metric_name].update(self.accuracy(outputs[torch.where(mask,False,True)], targets[torch.where(mask,False,True)]), torch.where(mask,False,True).sum())
             elif metric_name == "cm":
                 metric_fn.update(torch.argmax(outputs, dim=-1), targets)
+                self.masked_metrics[split][metric_name].update(torch.argmax(outputs[mask], dim=-1), targets[mask])
+                self.unmasked_metrics[split][metric_name].update(torch.argmax(outputs[torch.where(mask,False,True)], dim=-1), targets[torch.where(mask,False,True)])
             else:
-                #get logits
-                metric_fn.update(torch.argmax(torch.softmax(outputs,dim=-1), dim=-1),targets)
+                metric_fn.update(torch.max(softmax(outputs),dim=-1).values,targets)
+                self.masked_metrics[split][metric_name].update(torch.max(softmax(outputs[mask]),dim=-1).values,targets[mask])
+                self.unmasked_metrics[split][metric_name].update(torch.max(softmax(outputs[torch.where(mask,False,True)]),dim=-1).values,targets[torch.where(mask,False,True)])
 
     @_call_if_verbose
     def log_gradients(self,split):
         for name, param in self.model.named_parameters():
             self.writer.add_histogram(f"{split}.{name}.grad", param.grad, self.epoch)
 
-    @_call_if_verbose
-    def log_cm(self,split):
-       
-        self.metrics[split].cm.plot(filename=os.path.join(self.log_path,f"{self.name}_{split}_cm_{self.epoch}.png"))
 
     @_call_if_verbose
     def debug_epoch(self):
@@ -501,6 +592,8 @@ class Trainer:
         self.best_loss = np.inf
         self.best_model = self.model.state_dict()
         self.metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
+        self.masked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
+        self.unmasked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
 
 
 class NNTrainer(Trainer):
