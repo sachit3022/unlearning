@@ -1,0 +1,48 @@
+BASE_DIR : "unlearning"
+DEVICE : 'cuda:2'
+SEED : 42
+BATCH_SIZE : 32
+DATA_PATH: 'data'
+MODEL_DIR: 'models'
+
+directory:
+  RESULT_PATH: 'results'
+  LOG_PATH: 'logs'
+  LOGGER_PATH: 'logger.log'
+
+data:
+  num_workers: 6
+  rf_split: [0.1, 0.9]
+  num_classes: 2
+
+model:
+  name: 'ClassSpecificResNet'
+  model_args:   
+    num_classes: 2
+    block_config: [[3,8,1],[2,16,2],[2,32,2],[2,64,2]] 
+
+
+trainer :
+  
+  verbose: True
+  train: True
+  
+  log_freq: 10
+  epochs: 150
+  mixup: 0.1
+
+  optimizer: 
+    type: 'AdamW'
+    lr: 0.0003
+    weight_decay: 0.00001
+    betas: [0.9, 0.999]
+
+  scheduler: 
+    type: 'CosineAnnealingLR'
+    T_max: 150
+
+
+
+
+
+
