@@ -232,7 +232,7 @@ class UnlearnCelebA(Dataset):
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        self.dataset = CelebA(root=root,split=split, download=False,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
+        self.dataset = CelebA(root=root,split=split, download=True,target_type = ["attr","identity"] , transform=self.train_transforms if split=="train" else self.test_transforms)
         self.split = split
         
         self.aug = aug
@@ -445,13 +445,13 @@ def create_cifar10_dataloaders(config):
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
-    train_set = torchvision.datasets.CIFAR10( root=config.DATA_PATH, train=True, download=False, transform=train_transforms )
+    train_set = torchvision.datasets.CIFAR10( root=config.DATA_PATH, train=True, download=True, transform=train_transforms )
     #only 0 and 1 classes
     mod_train_set = torch.utils.data.Subset(train_set,torch.where((torch.tensor(train_set.targets) == 0) | (torch.tensor(train_set.targets) == 1))[0])
 
 
     held_out = torchvision.datasets.CIFAR10(
-        root=config.DATA_PATH, train=False, download=False, transform=test_transforms
+        root=config.DATA_PATH, train=False, download=True, transform=test_transforms
     )
     mod_held_out = torch.utils.data.Subset(held_out,torch.where((torch.tensor(held_out.targets) == 0) | (torch.tensor(held_out.targets) == 1))[0])
 

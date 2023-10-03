@@ -59,3 +59,31 @@ Hypernetworks based solution
 Metric to measure unlearning
 Maybe making a decision boundary based on just the loss charecterstics doesnot give more accuracy, what other charecterstics  we need to observe.
 Loss, predictive manifold (probability manifold). 
+
+
+
+How to start unlearning from scratch
+
+If you are using password based ssh connection you can access remote connection via vscode 
+https://docs.icer.msu.edu/SSH_Key-Based_Authentication/
+
+Setting up git
+Add the same id_rsa.pub generated in the previous process to git.
+
+> git clone https://github.com/sachit3022/unlearning.git
+
+Installing anaconda
+> wget https://repo.anaconda.com/archive/Anaconda3-2023.09-0-Linux-x86_64.sh
+> bash Anaconda3-2023.09-0-Linux-x86_64.sh
+
+Activating unlearning environment
+
+> conda env create -f environment.yml
+> conda activate unl
+
+In case the above installation doesnot work
+conda config --set unsatisfiable_hints false
+conda env export > environment.yml
+
+
+
