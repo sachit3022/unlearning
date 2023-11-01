@@ -60,7 +60,8 @@ Metric to measure unlearning
 Maybe making a decision boundary based on just the loss charecterstics doesnot give more accuracy, what other charecterstics  we need to observe.
 Loss, predictive manifold (probability manifold). 
 
-
+Steps used to setup enivironment.yaml file
+> conda env export > environment.yml
 
 How to start unlearning from scratch
 
@@ -81,9 +82,12 @@ Activating unlearning environment
 > conda env create -f environment.yml
 > conda activate unl
 
-In case the above installation doesnot work
-conda config --set unsatisfiable_hints false
-conda env export > environment.yml
+How to download CelebA dataset, As it it hosted on gdrive, we need to download manually due to the limitations of the google drive.
+> https://drive.google.com/drive/folders/0B7EVK8r0v71pWEZsZE9oNnFzTm8?resourcekey=0-5BR16BdXnb8hVj6CNHKzLg
+> Download locally and upload to the server.
+uzip the zipped files
+7zip e .....
+
 
 
 
