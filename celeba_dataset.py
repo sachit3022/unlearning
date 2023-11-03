@@ -15,6 +15,7 @@ from typing import Any, Callable, Optional, Tuple, Union, List
 import cv2 as cv
 import numpy as np
 from torchvision.datasets.utils import verify_str_arg
+from torch.utils.data.sampler import WeightedRandomSampler
 
 import csv
 
@@ -254,6 +255,25 @@ def make_retain_forget_dataset():
     new_df = new_df[new_df["split"]==0]
     df.loc[df["split"]==0,"split"]= df.apply(lambda x: 4 if x["img_id"] in new_df["img_id"].values else 3,axis=1)[df["split"]==0]
     df[["img_id","split"]].to_csv("data/celeba/list_unlearn_eval_partition.txt",sep=" ",index=False,header=False)
+
+
+
+def get_dataloader(batch_size,split):
+    ds = UnlearnCelebADataset(split=split)
+    sampler = WeightedRandomSampler(ds.example_weight, len(ds), replacement=True)
+    loader = DataLoader(ds, batch_size=batch_size,num_workers=4, pin_memory=True,sampler=sampler)
+    return loader
+
+def get_dataset(batch_size):
+    '''Get the dataset.'''
+    
+    train_loader = get_dataloader(batch_size,"train")
+    retain_loader = get_dataloader(batch_size,"retain")
+    forget_loader = get_dataloader(batch_size,"forget")
+    valid_loader = get_dataloader(batch_size,"valid")
+
+    return train_loader,retain_loader, forget_loader, valid_loader
+
 
 if __name__ == "__main__":
     #make_retain_forget_dataset()

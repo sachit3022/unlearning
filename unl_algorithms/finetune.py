@@ -2,7 +2,6 @@ from torch import nn, optim
 import torch
 
 
-
 def unlearning(
     net, 
     retain_loader, 

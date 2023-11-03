@@ -10,7 +10,9 @@ from torchvision.models import resnet18,ResNet18_Weights
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from torchmetrics import Accuracy
-from torch.utils.data.sampler import WeightedRandomSampler
+from celeba_dataset import get_dataset
+
+from unl_algorithms import finetune_unlearning as unlearning
 
 
 from celeba_dataset import UnlearnCelebADataset
@@ -26,26 +28,7 @@ if DEVICE != torch.device("cuda:0"):
 
 # Helper functions for loading the hidden dataset.
 
-def get_dataloader(batch_size,split):
-    ds = UnlearnCelebADataset(split=split)
-    sampler = WeightedRandomSampler(ds.example_weight, len(ds), replacement=True)
-    loader = DataLoader(ds, batch_size=batch_size,num_workers=4, pin_memory=True,sampler=sampler)
-    return loader
-
-def get_dataset(batch_size):
-    '''Get the dataset.'''
-    
-    train_loader = get_dataloader(batch_size,"train")
-    retain_loader = get_dataloader(batch_size,"retain")
-    forget_loader = get_dataloader(batch_size,"forget")
-    valid_loader = get_dataloader(batch_size,"valid")
-
-    return train_loader,retain_loader, forget_loader, valid_loader
-
-
-
-
-def train(net, train_loader,val_loader):
+def train(net, train_loader,val_loader,path):
     epochs = 50
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.001,
@@ -74,17 +57,18 @@ def train(net, train_loader,val_loader):
                 outputs = net(inputs)
                 acc.update(outputs,targets)
             print(f"Epoch {ep} accuracy {acc.compute()}")
-        torch.save(model.state_dict(), 'neurips-2023-machine-unlearning/original_model.pth')
+        torch.save(model.state_dict(), path)
     net.eval()
-
 
 if __name__ == '__main__':
 
+    """
     model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
     model.fc = nn.Linear(512,8)
     model.to(DEVICE)
     train_loader,retain_loader, forget_loader, validation_loader = get_dataset(32)
-    train(model,train_loader,validation_loader)
+
+    train(model,train_loader,validation_loader,'neurips-2023-machine-unlearning/original_model.pth')
     torch.save(model.state_dict(), 'neurips-2023-machine-unlearning/original_model.pth')
 
     for i in range(512):
@@ -92,9 +76,19 @@ if __name__ == '__main__':
         unlearning(model, retain_loader, forget_loader, validation_loader)
         state = model.state_dict()
         torch.save(state, f'tmp/unlearned_checkpoint_{i}.pth')
-    
-
     """
+
+    ##### RETRAIN CODE #####
+    train_loader,retain_loader, forget_loader, validation_loader = get_dataset(32)
+    for i in range(512):
+        model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        model.fc = nn.Linear(512,8)
+        model.to(DEVICE)
+        train(model,retain_loader,validation_loader,f"retrain/retrain_checkpoint_{i}.pth")
+    ########################
+    
+    """
+    #evaluation code
     if os.path.exists('neurips-2023-machine-unlearning/empty.txt'):
         # mock submission
         subprocess.run('touch submission.zip', shell=True)
