@@ -16,6 +16,7 @@ import cv2 as cv
 import numpy as np
 from torchvision.datasets.utils import verify_str_arg
 from torch.utils.data.sampler import WeightedRandomSampler
+import logging
 
 import csv
 
@@ -30,6 +31,7 @@ if DEVICE != 'cuda':
 
 def load_example(image,image_id,age_group,age,person_id):
     #age and age group are the same for now and they are indicative of the label class.
+    
     result = {
         'image': image.to(torch.float32),
         'image_id': image_id,
@@ -37,15 +39,16 @@ def load_example(image,image_id,age_group,age,person_id):
         'age': age,
         'person_id':person_id
     }
-    return result
+    return (image.to(torch.float32),age_group)
 
 
 class CelebADataset(Dataset):
     '''The hidden dataset.'''
     def __init__(self, split='train'):
         super().__init__()
-        self.transforms = transforms.Compose(               
-            [
+        self.transforms = transforms.Compose
+        (               
+            [   transforms.Resize((32,32)),
                 transforms.ToTensor(),
                 transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
             ]
@@ -72,24 +75,21 @@ class UnlearnCelebADataset(Dataset):
         super().__init__()
         self.transforms = transforms.Compose(               
             [
+                transforms.Resize((32,32)),
                 transforms.ToTensor(),
                 transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
             ]
         )
         self.examples= UnlearnCelebA(root="data",split=split, transform=self.transforms)
-        make_class_label = lambda labels : int("".join(map(lambda x : str(x.item()) , (labels[[20,17,13]] + 1)//2)),2)
-        
-
+        make_class_label = lambda labels : int("".join(map(lambda x : str(x.item()) , (labels[[20,17]] + 1)//2)),2) #13
         self.example_class_label = np.apply_along_axis(func1d=make_class_label,axis=1,arr=self.examples.attr.numpy())
-        class_weight = [1.7643e-04, 1.6949e-02, 1.6393e-02, 3.3333e-01, 2.9283e-04, 2.4752e-03, 3.9526e-03, 7.2993e-03]
+        class_weight = [0.0009, 0.0769, 0.0013, 0.0109] #[1.7643e-04, 1.6949e-02, 1.6393e-02, 3.3333e-01, 2.9283e-04, 2.4752e-03, 3.9526e-03, 7.2993e-03]
         self.example_weight = torch.from_numpy(np.vectorize(lambda x: class_weight[x])(self.example_class_label))
         self.example_class_label = torch.from_numpy(self.example_class_label)
-
-        self.database_len = min(20000, len(self.examples))
         self.attr = self.examples.attr
 
     def __len__(self):
-        return self.database_len
+        return len(self.examples)
 
     def __getitem__(self, idx):
         #we will be doing constructing a 3 class classification problem by using binary encoding.
@@ -98,14 +98,14 @@ class UnlearnCelebADataset(Dataset):
         class_label = self.example_class_label[idx].item()
         person_id = self.examples.identity[idx].item()
         example = load_example(image,idx,class_label,class_label,person_id)
-        return example
+        return (example[0],example[1],self.examples.splits[idx][0]==3)
 
 
 
 def plot_label_distribution(dataset,prefix="train"):
     labels = []
     for i in range(len(dataset)):
-        labels.append(dataset[i]['age_group'])
+        labels.append(dataset[i][1])#'age_group'
     labels = np.array(labels)
     unique, counts = np.unique(labels, return_counts=True)
     
@@ -113,7 +113,7 @@ def plot_label_distribution(dataset,prefix="train"):
     plt.title("Class label distribution")
     plt.xlabel("Class label")
     plt.ylabel("Frequency")
-    plt.savefig(f"tmp/{prefix}_class_label_distribution.png")
+    plt.savefig(f"{prefix}_class_label_distribution.png")
     plt.clf()
     return dict(zip(unique, counts))
 
@@ -225,7 +225,7 @@ class UnlearnCelebA(CelebA):
         landmarks_align = self._load_csv("list_landmarks_align_celeba.txt", header=1)
         attr = self._load_csv("list_attr_celeba.txt", header=1)
         if split_ == 0:
-            mask = torch.logical_or(splits.data == 2, splits.data == 3).squeeze()
+            mask = torch.logical_or(splits.data == 3, splits.data == 4).squeeze()
         else:
             mask = slice(None) if split_ is None else (splits.data == split_).squeeze()
         
@@ -234,12 +234,16 @@ class UnlearnCelebA(CelebA):
         else:
             self.filename = [splits.index[i] for i in torch.squeeze(torch.nonzero(mask))]
         
+        self.splits = splits.data[mask]
         self.identity = identity.data[mask]
         self.bbox = bbox.data[mask]
         self.landmarks_align = landmarks_align.data[mask]
         self.attr = attr.data[mask]
         self.attr = torch.div(self.attr + 1, 2, rounding_mode="floor")
         self.attr_names = attr.header
+        self.database_len = min(10000, len(self.attr))
+    def __len__(self):
+        return self.database_len
 
 def make_retain_forget_dataset():
     #2% of train dataset
@@ -249,9 +253,9 @@ def make_retain_forget_dataset():
     df = pd.merge(identity,attr,on="img_id")
     df = pd.merge(df,split,on="img_id")
    
-    df["class_label"] = df.apply(lambda x:int(str((x["Male"]+1)//2)+str((x["Gray_Hair"]+1)//2)+str((x["Chubby"]+1)//2),2),axis=1)
+    df["class_label"] = df.apply(lambda x:int(str((x["Male"]+1)//2)+str((x["Gray_Hair"]+1)//2),2),axis=1) #+str((x["Chubby"]+1)//2)
     #sample 2% of the dataset
-    new_df = df.loc[ (df["class_label"]==0) | (df["class_label"]==4)  ].sample(frac=0.02)
+    new_df = df.loc[ (df["class_label"]==0) | (df["class_label"]==2)  ].sample(frac=0.02)
     new_df = new_df[new_df["split"]==0]
     df.loc[df["split"]==0,"split"]= df.apply(lambda x: 4 if x["img_id"] in new_df["img_id"].values else 3,axis=1)[df["split"]==0]
     df[["img_id","split"]].to_csv("data/celeba/list_unlearn_eval_partition.txt",sep=" ",index=False,header=False)
@@ -260,8 +264,10 @@ def make_retain_forget_dataset():
 
 def get_dataloader(batch_size,split):
     ds = UnlearnCelebADataset(split=split)
+    logger = logging.getLogger()
+    logger.info(f"Datset has been loaded {split}")
     sampler = WeightedRandomSampler(ds.example_weight, len(ds), replacement=True)
-    loader = DataLoader(ds, batch_size=batch_size,num_workers=4, pin_memory=True,sampler=sampler)
+    loader = DataLoader(ds, batch_size=batch_size,num_workers=4, pin_memory=True,sampler=sampler,persistent_workers=True)
     return loader
 
 def get_dataset(batch_size):
@@ -271,25 +277,26 @@ def get_dataset(batch_size):
     retain_loader = get_dataloader(batch_size,"retain")
     forget_loader = get_dataloader(batch_size,"forget")
     valid_loader = get_dataloader(batch_size,"valid")
+    test_loader = get_dataloader(batch_size,"test")
 
-    return train_loader,retain_loader, forget_loader, valid_loader
+    return train_loader,retain_loader, forget_loader, valid_loader,test_loader
 
 
 if __name__ == "__main__":
-    #make_retain_forget_dataset()
+    make_retain_forget_dataset()
     """
     for split in ["train","forget","retain","valid", "test"]:
         print(f"Plotting {split} class label distribution")
         dataset = UnlearnCelebADataset(split=split)
         plot_label_distribution(dataset,prefix=split)
-    """
+    
     dataset = UnlearnCelebADataset(split="train")
     class_weights = plot_label_distribution(dataset,prefix="train")
     class_sample_count = torch.tensor([class_weights[i] for i in range(len(class_weights))])
     weight = 1. / class_sample_count
     print(weight)
     #sampler = WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), len(samples_weight))
-
+    """
     
 
 

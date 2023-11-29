@@ -1,1 +1,2 @@
 from attacks.ThresholdAttack import ThresholdAttack
+from attacks.GaussianAttack import GaussianAttack

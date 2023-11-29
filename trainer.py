@@ -101,7 +101,7 @@ class TrainerSettings:
     log_freq: int = 1
     log_path: str = "logs"
     model_dir: str = "models"
-    num_classes: int = 10
+    num_classes: int = 4
 
 
 #only valid for num classes 2 if more just an average works
@@ -254,6 +254,14 @@ class TrainerMetrics(dict):
     def items(self) -> dict_items:
         return self.splits.items()
     
+def _call_if_vanila_verbose(func):
+    def wrapper(self, *args, **kwargs):
+        if self.verbose:
+            return func(self, *args, **kwargs)
+        else:
+            return None
+    return wrapper
+    
 class Trainer:
     def __init__(self,model: nn.Module, dataloaders: TrainerDataLoaders,trainer_args: TrainerSettings):
 
@@ -265,25 +273,13 @@ class Trainer:
         
 
         self.model = model.to(self.device)
-        #self.gradCam = GradCamWrapper(self.model,self.device)
+        self.gradCam = GradCamWrapper(self.model,self.device)
         
         
-
         self.dataloaders = dataloaders
         self.train_loader = dataloaders.train
         self.val_loader = dataloaders.val
         self.test_loader = dataloaders.test
-
-
-
-        split = "train"
-        aug = "only_patch"
-        dist = "p"
-
-        test_set = UnlearnCelebA(root = "data", split=split,aug =aug) 
-        
-        self.test_dataloader = DataLoader(test_set, batch_size=32,num_workers=6,persistent_workers=True, pin_memory=True,sampler=SampleCelebA(test_set))
-        
 
 
         self.optimizer = operator.attrgetter(trainer_args.optimizer.type)(optim)(
@@ -313,7 +309,7 @@ class Trainer:
         return trainer
 
     def train(self, epochs: int):
-        progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch+1), disable=not self.verbose)
+        progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch+1))#, disable=not self.verbose
       
         for epoch in progress_bar:
             self.epoch = epoch
@@ -331,8 +327,9 @@ class Trainer:
     def train_epoch(self):
         self.model.train()
         self.metrics.train.reset() 
-        self.masked_metrics.train.reset()
-        self.unmasked_metrics.train.reset()
+        
+        #self.masked_metrics.train.reset()
+        #self.unmasked_metrics.train.reset()
         for batch_id, batch_data in enumerate(self.train_loader):
             inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
             outputs = self.model(inputs) #targets 
@@ -351,16 +348,17 @@ class Trainer:
             test_model(self.model,self.test_dataloader,self.device,f"test",self.logger) #test_dataloader
         """
     
+    @_call_if_vanila_verbose
     def test_epoch(self):
         self.metrics.val.reset() 
-        self.masked_metrics.val.reset()
-        self.unmasked_metrics.val.reset()
+        #self.masked_metrics.val.reset()
+        #self.unmasked_metrics.val.reset()
         self.test(self.val_loader, split="val")
 
         if self.test_loader is not None: 
             self.metrics.test.reset() 
-            self.masked_metrics.test.reset()
-            self.unmasked_metrics.test.reset()
+            #self.masked_metrics.test.reset()
+            #self.unmasked_metrics.test.reset()
             self.test(self.test_loader,split="test")
         self.debug_epoch()
 
@@ -398,20 +396,8 @@ class Trainer:
             else:
                 return None
         return wrapper
-    
-    def _call_if_vanila_verbose(func):
-        def wrapper(self, *args, **kwargs):
-            if self.verbose:
-                return func(self, *args, **kwargs)
-            else:
-                return None
-        return wrapper
-    
-    
-    @_call_if_vanila_verbose
-    def save(self, path):
         
-
+    def save(self, path):
         torch.save({
             'epoch': self.epoch,
             'model_state_dict': self.best_model,
@@ -434,7 +420,7 @@ class Trainer:
     @_call_if_verbose
     def epoch_logging(self,epoch,progress_bar):
         metric_dict =  {"lr": self.scheduler.get_last_lr()[0]}
-        for name,m in [("metrics",self.metrics),("masked_metrics",self.masked_metrics),("unmasked_metrics",self.unmasked_metrics)]:
+        for name,m in [("metrics",self.metrics)]: #,("masked_metrics",self.masked_metrics),("unmasked_metrics",self.unmasked_metrics)
             for split,metrics in m.items():
                 for metric_name,metric in metrics.items():
                     if  metric_name =="cm": 
@@ -479,21 +465,21 @@ class Trainer:
         for metric_name,metric_fn in self.metrics[split].items():
             if metric_name == "loss":
                 metric_fn.update(loss.item(), inputs.size(0))
-                self.masked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
-                self.unmasked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
+                #self.masked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
+                #self.unmasked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
 
             elif metric_name == "accuracy":
                 metric_fn.update(self.accuracy(outputs, targets), inputs.size(0))
-                self.masked_metrics[split][metric_name].update(self.accuracy(outputs[mask], targets[mask]), mask.sum())
-                self.unmasked_metrics[split][metric_name].update(self.accuracy(outputs[torch.where(mask,False,True)], targets[torch.where(mask,False,True)]), torch.where(mask,False,True).sum())
+                #self.masked_metrics[split][metric_name].update(self.accuracy(outputs[mask], targets[mask]), mask.sum())
+                #self.unmasked_metrics[split][metric_name].update(self.accuracy(outputs[torch.where(mask,False,True)], targets[torch.where(mask,False,True)]), torch.where(mask,False,True).sum())
             elif metric_name == "cm":
                 metric_fn.update(torch.argmax(outputs, dim=-1), targets)
-                self.masked_metrics[split][metric_name].update(torch.argmax(outputs[mask], dim=-1), targets[mask])
-                self.unmasked_metrics[split][metric_name].update(torch.argmax(outputs[torch.where(mask,False,True)], dim=-1), targets[torch.where(mask,False,True)])
+                #self.masked_metrics[split][metric_name].update(torch.argmax(outputs[mask], dim=-1), targets[mask])
+                #self.unmasked_metrics[split][metric_name].update(torch.argmax(outputs[torch.where(mask,False,True)], dim=-1), targets[torch.where(mask,False,True)])
             else:
                 metric_fn.update(torch.max(softmax(outputs),dim=-1).values,targets)
-                self.masked_metrics[split][metric_name].update(torch.max(softmax(outputs[mask]),dim=-1).values,targets[mask])
-                self.unmasked_metrics[split][metric_name].update(torch.max(softmax(outputs[torch.where(mask,False,True)]),dim=-1).values,targets[torch.where(mask,False,True)])
+                #self.masked_metrics[split][metric_name].update(torch.max(softmax(outputs[mask]),dim=-1).values,targets[mask])
+                #self.unmasked_metrics[split][metric_name].update(torch.max(softmax(outputs[torch.where(mask,False,True)]),dim=-1).values,targets[torch.where(mask,False,True)])
 
     @_call_if_verbose
     def log_gradients(self,split):
@@ -592,8 +578,8 @@ class Trainer:
         self.best_loss = np.inf
         self.best_model = self.model.state_dict()
         self.metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
-        self.masked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
-        self.unmasked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
+        #self.masked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
+        #self.unmasked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
 
 
 class NNTrainer(Trainer):
@@ -613,28 +599,40 @@ class NNTrainer(Trainer):
     def train_epoch(self):
 
         self.model.train()       
-        for batch_id, batch_data in enumerate(self.train_loader):
-            inputs, targets,retain_mask  = batch_data[0].to(self.device), batch_data[1].to(self.device), batch_data[2].to(self.device)
+        forget_iter = iter(self.dataloaders.forget)
+        for batch_id, batch_data in enumerate(self.dataloaders.retain):
+            inputs_retrain, targets_retrain  = batch_data[0].to(self.device), batch_data[1].to(self.device)
+            try:
+                batch_data_forget = next(forget_iter)
+            except StopIteration:
+                forget_iter = iter(self.dataloaders.forget)
+                batch_data_forget = next(forget_iter)
+            
+            inputs_forget, targets_forget  = batch_data_forget[0].to(self.device), batch_data_forget[1].to(self.device)
+            inputs = torch.cat([inputs_retrain,inputs_forget],dim=0)
+            targets = torch.cat([targets_retrain,targets_forget],dim=0)
+            retain_mask_og = torch.cat([torch.ones_like(targets_retrain),torch.zeros_like(targets_forget)],dim=0)
+
             outputs = self.model(inputs) 
 
-            targets_onehot = F.one_hot(targets, num_classes=10).float()
-            retain_mask = retain_mask.reshape(-1,1).float()
+            targets_onehot = F.one_hot(targets, num_classes=self.num_classes).float()
+            retain_mask = retain_mask_og.reshape(-1,1).float()
 
             with torch.no_grad():
-                _og_outputs = self.og_model(inputs) # only for hook_features
+                _ = self.og_model(inputs) # only for hook_features
                 hk = self.hook_features
                 D = -torch.norm(hk[:, None] - hk, dim=-1)
                 D[:,retain_mask.flatten()==0] = -100000
                 ans =  F.softmax( D - (1 - retain_mask @ retain_mask.T + torch.eye(hk.shape[0],device=self.device))*100000 ,dim=1) @ targets_onehot
                 targets_onehot =  (retain_mask * targets_onehot + (1-retain_mask) * ans)
-
+            
             loss = self.loss_fn(outputs, targets_onehot) 
 
             self.optimizer.zero_grad()      
             loss.backward()
 
             #### LOGGING ######
-            self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
+            self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs[retain_mask_og==1],loss = loss)
             ###################
             
             self.optimizer.step()

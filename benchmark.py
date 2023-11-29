@@ -15,6 +15,8 @@ import network
 import trainer as tr
 from trainer import Trainer, AdverserialTrainer, NNTrainer, TrainerSettings, count_parameters
 from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders,create_celeba_id_dataloaders
+from dataset import TrainerDataLoaders
+from celeba_dataset import get_dataset
 from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
 from network import MTLLoss
 import argparse
@@ -24,7 +26,7 @@ def finetune_unlearning(args, model, dataloaders):
     #how forgetting happens in the model when finetuining.
     optimizer_config = getattr(tr, args.finetune.optimizer.type + "OptimConfig" )(**args.finetune.optimizer)
     scheduler_config = getattr(tr, args.finetune.scheduler.type + "SchedulerConfig" )(**args.finetune.scheduler)
-    trainer_settings = TrainerSettings(name = f"finetune_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    trainer_settings = TrainerSettings(name = f"finetune_{args.SEED}_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     finetune_dataloaders = get_finetune_dataloaders(dataloaders)
     finetune_trainer = Trainer(model=model,dataloaders=finetune_dataloaders,trainer_args=trainer_settings)
     finetune_trainer.train(args.finetune.epochs)
@@ -33,7 +35,7 @@ def finetune_unlearning(args, model, dataloaders):
 def scrubs_unlearning(args,model,dataloaders):
     optimizer_config = getattr(tr, args.finetune.optimizer.type + "OptimConfig" )(**args.finetune.optimizer)
     scheduler_config = getattr(tr, args.finetune.scheduler.type + "SchedulerConfig" )(**args.finetune.scheduler)
-    trainer_settings = TrainerSettings(name = f"scrubs_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.disjctory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    trainer_settings = TrainerSettings(name = f"scrubs_{args.SEED}_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     finetune_trainer = AdverserialTrainer(model=model,dataloaders=dataloaders,trainer_args=trainer_settings)
     finetune_trainer.train(args.finetune.epochs)
     return finetune_trainer.model
@@ -43,7 +45,7 @@ def nearest_neighbor_unlearning(args, model, dataloaders):
 
     optimizer_config = getattr(tr, args.finetune.optimizer.type + "OptimConfig" )(** args.finetune.optimizer)
     scheduler_config = getattr(tr, args.finetune.scheduler.type + "SchedulerConfig" )(**args.finetune.scheduler)
-    nn_trainer_settings = TrainerSettings(name = f"NN_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    nn_trainer_settings = TrainerSettings(name = f"NN_{args.SEED}_{model.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.finetune.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     nn_trainer = NNTrainer(model=model,dataloaders=dataloaders,trainer_args=nn_trainer_settings)
     nn_trainer.train(args.finetune.epochs)
     return nn_trainer.model
@@ -62,7 +64,6 @@ def main(args):
     logger = logging.getLogger()
     logger.info(f"config: {args}")
 
-
     # load model
     net = getattr(network, args.model.name)
     net = net(**args.model.model_args)
@@ -70,7 +71,6 @@ def main(args):
         net.load_state_dict(torch.load(
             args.model.checkpoint, map_location=args.DEVICE))
     net.name = args.model.name
-    
     logger.info(f"Model has {count_parameters(net)} parameters")    
 
     
@@ -83,16 +83,17 @@ def main(args):
     #compute_retrain_unlearning_metrics: retrain from scratch model and unlearnt model outputs as  discriminators used if forget and test are from different distributions
     ##########################
     
-    dataloader_fn = create_celeba_dataloaders #create_dataloaders_missing_class #create_celeba_dataloaders #create_celeba_id_dataloaders #create_dataloaders_uniform_sampling
+    #dataloader_fn = create_celeba_dataloaders #create_dataloaders_missing_class #create_celeba_dataloaders #create_celeba_id_dataloaders #create_dataloaders_uniform_sampling
+    train_loader,retain_loader, forget_loader, validation_loader,test_loader = get_dataset(args.BATCH_SIZE)
 
-    
     # scratch trainer for perfect baseline
+   
     optimizer_config = getattr(tr, args.trainer.optimizer.type + "OptimConfig" )(** args.trainer.optimizer)
     scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
-    
     """
-    scratch_trainer_settings = TrainerSettings(name = "scratch_"+net.name,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
-    scratch_data_loaders = dataloader_fn(config=args,scratch=False)
+    scratch_trainer_settings = TrainerSettings(name = f"scratch_{args.SEED}_{net.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    #scratch_data_loaders = dataloader_fn(config=args,scratch=False)
+    scratch_data_loaders = TrainerDataLoaders(**{"train":retain_loader,"retain":retain_loader,"forget":forget_loader,"val":validation_loader,"test":test_loader})
     scratch_trainer = Trainer(model=copy.deepcopy(net),dataloaders=scratch_data_loaders,trainer_args=scratch_trainer_settings)
     
     if args.scratch_trainer_checkpoint is not None:
@@ -100,38 +101,45 @@ def main(args):
     if args.trainer.train:
        scratch_trainer.train(epochs=args.trainer.epochs)
     """
+
+    
     #mtl_loss_fn = MTLLoss(heads=range(40)) #range(40)[8,15,19]
     #loss_fn=mtl_loss_fn
 
-    dataloaders =dataloader_fn(config=args)
+    #dataloaders =dataloader_fn(config=args)
+    dataloaders = TrainerDataLoaders(**{"train":train_loader,"retain":retain_loader,"forget":forget_loader,"val":validation_loader,"test":test_loader})
+
     trainer_settings = TrainerSettings(name = args.experiment,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
-    if args.trainer_checkpoint is not None:
-        trainer = trainer.load_from_checkpoint(args.trainer_checkpoint)
+    if args.trainer.checkpoint is not None:
+        trainer = trainer.load_from_checkpoint(args.trainer.checkpoint)
     trainer.test_epoch()
     
     if args.trainer.train:
         trainer.train(epochs=args.trainer.epochs)
-
-    # compute memorization score
+    
     """
+    # compute memorization score
     mia_scores = compute_retrain_unlearning_metrics(args, trainer.model, scratch_trainer.model, dataloaders) # or can use compute_unlearning_metrics
     scores = compute_acc_metrics(args, trainer.model,scratch_trainer.model,dataloaders)
     logger.info(f"scores before unlearning for is {scores}")
-    
-
+    """
+   
     #insert unlearning algorithm here.
-    for unlearning_funcs in [scrubs_unlearning,nearest_neighbor_unlearning,finetune_unlearning]:
+    """
+    for unlearning_funcs in [scrubs_unlearning,nearest_neighbor_unlearning,finetune_unlearning]: #
         #parallelise this step.
         model = copy.deepcopy(trainer.model)
         unleart_model = unlearning_funcs(args,model,dataloaders)
+        
+
         mia_scores = compute_retrain_unlearning_metrics(args, unleart_model, scratch_trainer.model, dataloaders)
         logger.info(f"MIA score after unlearning for is {mia_scores}")
         scores = compute_acc_metrics(args, unleart_model,scratch_trainer.model,dataloaders)
         logger.info(f"scores after unlearning for is {scores}")
     """
-    
-    
+
+   
     return 
 
 
@@ -140,11 +148,13 @@ def main(args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Unlearning')
-
+    """
     parser.add_argument('--cs_acc', default=2, type=int,help="2 for attractiveness and 8 for hair color")
     parser.add_argument('--ps_pb',default=0.0,type=float,help="percent of samples where Identity patch is trained.")
+    """
     args = config.set_config(parser)
     main(args)
+
 
     # Comments:
     # not much progress while training the model on the forget set.

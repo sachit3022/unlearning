@@ -78,8 +78,8 @@ def get_args(parser):
         parser.add_argument('-cf','--config_file', default="config.yaml",
                             type=str, help='yaml config file, default: config.yaml')
     
-    parser.add_argument('-d','--device', default='cuda:1', type=str,
-                        help='cuda:number or cpu, default: cuda:1')
+    parser.add_argument('-d','--device', default='cuda:0', type=str,
+                        help='cuda:number or cpu, default: cuda:0')
     parser.add_argument('-exp','--experiment', default="unl",
                         type=str, help='name of the experiment default: unl')
     parser.add_argument('-am','--attack_model', default=None, action=dotformat,
@@ -92,6 +92,7 @@ def get_args(parser):
                         help='attack model, default: None')
     parser.add_argument('-rc','--remove_class', default=0, type=int,
                         help='attack model, default: None')
+    parser.add_argument('-s','--SEED', default=42, type=int,help='seed, default: 42')
 
     config_file = parser.parse_args().config_file
     assert os.path.isfile(config_file), "config file not found"
