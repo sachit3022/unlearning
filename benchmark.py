@@ -84,7 +84,7 @@ def main(args):
     ##########################
     
     #dataloader_fn = create_celeba_dataloaders #create_dataloaders_missing_class #create_celeba_dataloaders #create_celeba_id_dataloaders #create_dataloaders_uniform_sampling
-    train_loader,retain_loader, forget_loader, validation_loader,test_loader = get_dataset(args.BATCH_SIZE)
+    train_loader,retain_loader, forget_loader, validation_loader,test_loader = get_dataset(args.BATCH_SIZE,balanced=False)
 
     # scratch trainer for perfect baseline
    
@@ -108,7 +108,7 @@ def main(args):
 
     #dataloaders =dataloader_fn(config=args)
     dataloaders = TrainerDataLoaders(**{"train":train_loader,"retain":retain_loader,"forget":forget_loader,"val":validation_loader,"test":test_loader})
-
+    
     trainer_settings = TrainerSettings(name = args.experiment,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
     trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
     if args.trainer.checkpoint is not None:

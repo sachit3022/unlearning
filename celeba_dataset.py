@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional, Tuple, Union, List
 import cv2 as cv
 import numpy as np
 from torchvision.datasets.utils import verify_str_arg
-from torch.utils.data.sampler import WeightedRandomSampler
+from torch.utils.data.sampler import WeightedRandomSampler,RandomSampler
 import logging
 
 import csv
@@ -54,7 +54,7 @@ class CelebADataset(Dataset):
             ]
         )
         self.examples= CelebA(root="data",split=split, transform=self.transforms)
-        self.database_len =  min(1000, len(self.examples))
+        self.database_len =   len(self.examples)
         self.attr = self.examples.attr
 
     def __len__(self):
@@ -83,7 +83,7 @@ class UnlearnCelebADataset(Dataset):
         self.examples= UnlearnCelebA(root="data",split=split, transform=self.transforms)
         make_class_label = lambda labels : int("".join(map(lambda x : str(x.item()) , (labels[[20,17]] + 1)//2)),2) #13
         self.example_class_label = np.apply_along_axis(func1d=make_class_label,axis=1,arr=self.examples.attr.numpy())
-        class_weight = [0.0009, 0.0769, 0.0013, 0.0109] #[1.7643e-04, 1.6949e-02, 1.6393e-02, 3.3333e-01, 2.9283e-04, 2.4752e-03, 3.9526e-03, 7.2993e-03]
+        class_weight = [1.7643e-04, 1.6949e-02, 1.6393e-02, 3.3333e-01, 2.9283e-04, 2.4752e-03, 3.9526e-03, 7.2993e-03]
         self.example_weight = torch.from_numpy(np.vectorize(lambda x: class_weight[x])(self.example_class_label))
         self.example_class_label = torch.from_numpy(self.example_class_label)
         self.attr = self.examples.attr
@@ -241,7 +241,7 @@ class UnlearnCelebA(CelebA):
         self.attr = attr.data[mask]
         self.attr = torch.div(self.attr + 1, 2, rounding_mode="floor")
         self.attr_names = attr.header
-        self.database_len = min(10000, len(self.attr))
+        self.database_len = len(self.attr)
     def __len__(self):
         return self.database_len
 
@@ -262,22 +262,25 @@ def make_retain_forget_dataset():
 
 
 
-def get_dataloader(batch_size,split):
+def get_dataloader(batch_size,split,balanced=False):
     ds = UnlearnCelebADataset(split=split)
     logger = logging.getLogger()
     logger.info(f"Datset has been loaded {split}")
-    sampler = WeightedRandomSampler(ds.example_weight, len(ds), replacement=True)
+    if balanced:
+        sampler = WeightedRandomSampler(ds.example_weight, len(ds.example_weight))
+    else:
+        sampler = RandomSampler(ds)
     loader = DataLoader(ds, batch_size=batch_size,num_workers=4, pin_memory=True,sampler=sampler,persistent_workers=True)
     return loader
 
-def get_dataset(batch_size):
+def get_dataset(batch_size,balanced=False):
     '''Get the dataset.'''
     
-    train_loader = get_dataloader(batch_size,"train")
-    retain_loader = get_dataloader(batch_size,"retain")
-    forget_loader = get_dataloader(batch_size,"forget")
-    valid_loader = get_dataloader(batch_size,"valid")
-    test_loader = get_dataloader(batch_size,"test")
+    train_loader = get_dataloader(batch_size,"train",balanced=balanced)
+    retain_loader = get_dataloader(batch_size,"retain",balanced=balanced)
+    forget_loader = get_dataloader(batch_size,"forget", balanced=balanced)
+    valid_loader = get_dataloader(batch_size,"valid",balanced=balanced)
+    test_loader = get_dataloader(batch_size,"test",balanced=balanced)
 
     return train_loader,retain_loader, forget_loader, valid_loader,test_loader
 

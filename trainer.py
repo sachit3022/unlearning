@@ -101,7 +101,7 @@ class TrainerSettings:
     log_freq: int = 1
     log_path: str = "logs"
     model_dir: str = "models"
-    num_classes: int = 4
+    num_classes: int = 8
 
 
 #only valid for num classes 2 if more just an average works
@@ -185,7 +185,7 @@ class Metrics(dict):
     #if you want to add more metrics, add them here and it should have update and reset methods
     def __init__(self,device,num_classes):
         self.device = device
-        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device)} #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#"pfpr": PrecesionFRR()
+        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),} #"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device) #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#"pfpr": PrecesionFRR()
         self.best_accuracy = 0
         self.best_loss = np.inf
 
@@ -293,13 +293,10 @@ class Trainer:
         self.init_trainer_tracker()
         self.model_dir = trainer_args.model_dir
         self.logger = logging.getLogger()
+        self.log_path = trainer_args.log_path
+        self.writer = SummaryWriter(self.log_path + f"/runs/{self.name}")
+        self.log_freq = trainer_args.log_freq
 
-        #logging
-        if self.verbose: 
-            self.log_path = trainer_args.log_path
-            self.writer = SummaryWriter(self.log_path + f"/runs/{self.name}")
-            self.logger = logging.getLogger()
-            self.log_freq = trainer_args.log_freq
             
             
     def load_from_checkpoint(self, path):
@@ -316,11 +313,14 @@ class Trainer:
             self.train_epoch()
             self.test_epoch()
             self.epoch_logging(epoch,progress_bar)
-                
-        #self.model.load_state_dict(self.best_model)
-        self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
-        self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
-        self.save(self.model_dir+f"/model_{self.name}.pt")
+            if self.metrics.val.best_accuracy <= self.metrics.val.accuracy.avg:
+                self.metrics.val.best_accuracy = self.metrics.val.accuracy.avg
+                self.best_model = self.model.state_dict()
+                self.save(self.model_dir+f"/model_{self.name}.pt")     
+            #self.model.load_state_dict(self.best_model)
+            self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
+            self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
+        
         return self.model
     
 
@@ -413,7 +413,7 @@ class Trainer:
         self.log_metrics(split,batch_id,batch_data,outputs,loss)
         #self.save(self.model_dir+f"/model_{self.name}.pt")
         #self.log_gradients(split)
-        self.random_data_snap(split,batch_id,batch_data,outputs,loss)
+        #self.random_data_snap(split,batch_id,batch_data,outputs,loss)
         #self.random_grad_cam(split,batch_id,batch_data,outputs,loss)
     
 
@@ -449,6 +449,7 @@ class Trainer:
     def  random_data_snap(self,split,batch_id,batch_data,outputs,loss):
         if random.random() < 0.01:
             plot_image_grid(batch_data[0][:16],labels=batch_data[1][:16], filename=self.log_path+f"/{split}_{self.epoch}_{batch_id}.png",title=f"Epoch {self.epoch} {split} Images")
+    
     @_call_if_verbose
     def random_grad_cam(self,split,batch_id,batch_data,outputs,loss):
         if random.random() < 0.01:

@@ -1,7 +1,7 @@
 BASE_DIR : "unlearning"
 DEVICE : 'cuda:0'
 SEED : 42
-BATCH_SIZE : 64
+BATCH_SIZE : 512
 DATA_PATH: 'data'
 MODEL_DIR: 'models'
 
@@ -19,7 +19,7 @@ model:
   name: 'resnet18' #IdentitySpoof #MTLResNet resnet50 ClassSpecificResNet NormConstrainedResNet
   model_args:
     # num_heads: 40 #40
-    num_classes: 4
+    num_classes: 8
   # model_args:
   #   num_classes: 10
   #   block_config: [[3,4,1],[2,8,2],[2,16,2]] 
@@ -28,11 +28,11 @@ model:
 #trainer_checkpoint: "/research/hal-gaudisac/unlearning/models/model_resnet50_20.pt"
 trainer :
   #checkpoint: 'models/model_unl.pt'
-  verbose: False
+  verbose: True
   train: True
   
   log_freq: 10
-  epochs: 60
+  epochs: 50
 
   # optimizer: 
   #   type: 'SGD'
@@ -48,7 +48,7 @@ trainer :
 
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 60
+    T_max: 50
 
 attack_model:
   name: 'MLP-grad-mia'
