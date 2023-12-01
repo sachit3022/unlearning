@@ -29,3 +29,4 @@ def unlearning(
             optimizer.step()
         scheduler.step()     
     net.eval()
+    return net

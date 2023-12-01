@@ -14,10 +14,8 @@ import json
 import network
 import trainer as tr
 from trainer import Trainer, AdverserialTrainer, NNTrainer, TrainerSettings, count_parameters
-from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders,create_celeba_id_dataloaders
-from dataset import TrainerDataLoaders
-from celeba_dataset import get_dataset
-from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
+from datasets import get_finetune_dataloaders, get_scratch_datatloaders,TrainerDataLoaders,get_dataset
+from evaluation.score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
 from network import MTLLoss
 import argparse
 
@@ -51,7 +49,35 @@ def nearest_neighbor_unlearning(args, model, dataloaders):
     return nn_trainer.model
 
 ##################################     New unlearnig algorithm goes here       ######################################
+def train(args,net,dataloaders):
+    
+    optimizer_config = getattr(tr, args.trainer.optimizer.type + "OptimConfig" )(** args.trainer.optimizer)
+    scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
 
+    trainer_settings = TrainerSettings(name = args.experiment,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
+    if args.trainer.checkpoint is not None:
+        trainer = trainer.load_from_checkpoint(args.trainer.checkpoint)
+    trainer.test_epoch()
+    if args.trainer.train:
+        trainer.train(epochs=args.trainer.epochs)
+    return trainer.model
+
+def training_from_scratch(args, net, dataloaders):
+    
+    optimizer_config = getattr(tr, args.scratch_trainer.optimizer.type + "OptimConfig" )(** args.scratch_trainer.optimizer)
+    scheduler_config = getattr(tr, args.scratch_trainer.scheduler.type + "SchedulerConfig" )(**args.scratch_trainer.scheduler)
+
+    scratch_trainer_settings = TrainerSettings(name = f"scratch_{args.SEED}_{net.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.scratch_trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
+    scratch_data_loaders = TrainerDataLoaders(**{"train":dataloaders.retain,"retain":dataloaders.retain,"forget":dataloaders.forget,"val":dataloaders.val,"test":dataloaders.test})
+    scratch_trainer = Trainer(model=copy.deepcopy(net),dataloaders=scratch_data_loaders,trainer_args=scratch_trainer_settings)
+    
+    if args.scratch_trainer.checkpoint is not None:
+       scratch_trainer = scratch_trainer.load_from_checkpoint(args.scratch_trainer.checkpoint)
+    if args.scratch_trainer.train:
+       scratch_trainer.train(epochs=args.scratch_trainer.epochs)
+
+    return scratch_trainer.model
 
 
 #####################################################################################################################
@@ -74,70 +100,15 @@ def main(args):
     logger.info(f"Model has {count_parameters(net)} parameters")    
 
     
-    ##### CONFIGURE TRAINING #####
-    # type of create_dataloaders_missing_class, create_dataloaders_uniform_sampling, create_injection_dataloaders
-    # type of trainer: Trainer, AdverserialTrainer, NNTrainer
-    #if you want custom trainer, create a new class in trainer.py and import it here and use it
-    # type of compute_unlearning_metrics: compute_unlearning_metrics, compute_retrain_unlearning_metrics
-    #compute_unlearning_metrics: test and forget set discriminators used if forget and test are from the same distribution
-    #compute_retrain_unlearning_metrics: retrain from scratch model and unlearnt model outputs as  discriminators used if forget and test are from different distributions
-    ##########################
-    
-    #dataloader_fn = create_celeba_dataloaders #create_dataloaders_missing_class #create_celeba_dataloaders #create_celeba_id_dataloaders #create_dataloaders_uniform_sampling
-    train_loader,retain_loader, forget_loader, validation_loader,test_loader = get_dataset(args.BATCH_SIZE,balanced=False)
-
-    # scratch trainer for perfect baseline
-   
-    optimizer_config = getattr(tr, args.trainer.optimizer.type + "OptimConfig" )(** args.trainer.optimizer)
-    scheduler_config = getattr(tr, args.trainer.scheduler.type + "SchedulerConfig" )(**args.trainer.scheduler)
-    """
-    scratch_trainer_settings = TrainerSettings(name = f"scratch_{args.SEED}_{net.name}",optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
-    #scratch_data_loaders = dataloader_fn(config=args,scratch=False)
-    scratch_data_loaders = TrainerDataLoaders(**{"train":retain_loader,"retain":retain_loader,"forget":forget_loader,"val":validation_loader,"test":test_loader})
-    scratch_trainer = Trainer(model=copy.deepcopy(net),dataloaders=scratch_data_loaders,trainer_args=scratch_trainer_settings)
-    
-    if args.scratch_trainer_checkpoint is not None:
-       scratch_trainer = scratch_trainer.load_from_checkpoint(args.scratch_trainer_checkpoint)
-    if args.trainer.train:
-       scratch_trainer.train(epochs=args.trainer.epochs)
-    """
-
-    
-    #mtl_loss_fn = MTLLoss(heads=range(40)) #range(40)[8,15,19]
-    #loss_fn=mtl_loss_fn
-
-    #dataloaders =dataloader_fn(config=args)
+    train_loader,retain_loader, forget_loader, validation_loader,test_loader = get_dataset(args,balanced=False)
     dataloaders = TrainerDataLoaders(**{"train":train_loader,"retain":retain_loader,"forget":forget_loader,"val":validation_loader,"test":test_loader})
-    
-    trainer_settings = TrainerSettings(name = args.experiment,optimizer=optimizer_config, scheduler=scheduler_config, log_path= args.directory.LOG_PATH,device=args.device, **{k:v for k,v in args.trainer.items() if k not in {"optimizer","scheduler","train","epochs"}} )
-    trainer = Trainer(model=copy.deepcopy(net),dataloaders=dataloaders,trainer_args=trainer_settings)
-    if args.trainer.checkpoint is not None:
-        trainer = trainer.load_from_checkpoint(args.trainer.checkpoint)
-    trainer.test_epoch()
-    
-    if args.trainer.train:
-        trainer.train(epochs=args.trainer.epochs)
-    
-    """
-    # compute memorization score
-    mia_scores = compute_retrain_unlearning_metrics(args, trainer.model, scratch_trainer.model, dataloaders) # or can use compute_unlearning_metrics
-    scores = compute_acc_metrics(args, trainer.model,scratch_trainer.model,dataloaders)
-    logger.info(f"scores before unlearning for is {scores}")
-    """
-   
-    #insert unlearning algorithm here.
-    """
-    for unlearning_funcs in [scrubs_unlearning,nearest_neighbor_unlearning,finetune_unlearning]: #
-        #parallelise this step.
-        model = copy.deepcopy(trainer.model)
-        unleart_model = unlearning_funcs(args,model,dataloaders)
-        
 
-        mia_scores = compute_retrain_unlearning_metrics(args, unleart_model, scratch_trainer.model, dataloaders)
-        logger.info(f"MIA score after unlearning for is {mia_scores}")
-        scores = compute_acc_metrics(args, unleart_model,scratch_trainer.model,dataloaders)
-        logger.info(f"scores after unlearning for is {scores}")
-    """
+    scratch_model = training_from_scratch(args, net, dataloaders)
+    full_model = train(args, net, dataloaders)
+    unleart_model = nearest_neighbor_unlearning(args,full_model,dataloaders)
+    #evaluation
+    
+
 
    
     return 
@@ -148,20 +119,7 @@ def main(args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Unlearning')
-    """
-    parser.add_argument('--cs_acc', default=2, type=int,help="2 for attractiveness and 8 for hair color")
-    parser.add_argument('--ps_pb',default=0.0,type=float,help="percent of samples where Identity patch is trained.")
-    """
     args = config.set_config(parser)
     main(args)
-
-
-    # Comments:
-    # not much progress while training the model on the forget set.
-    # why is there no change in gradients when there is change in the loss? investigate the mia_dataset and comeup with solution.
-    # no matter what the train and test are the same
-    # by using label smoothing the mia score decreases and test and train remians the same.
-    # best to test on faces dataset. vggface2
-    # think of ideas to debug the gradient problem.
     
 

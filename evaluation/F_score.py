@@ -69,7 +69,7 @@ if __name__ == '__main__':
     model.to(DEVICE)
     train_loader,retain_loader, forget_loader, validation_loader,test_loader = get_dataset(32)
     train(model,train_loader,validation_loader,'neurips-2023-machine-unlearning/original_model.pth')
-
+    
     """
     ##### Unlearning CODE #####
     os.makedirs('tmp', exist_ok=True)

@@ -19,13 +19,18 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmResta
 
 from torch.utils.data import DataLoader, Subset
 from torchmetrics import  ConfusionMatrix
-from plots import plot_losses,plot_image_grid,plot_confusion_matrix,GradCamWrapper
+from plots import plot_losses,plot_image_grid,plot_confusion_matrix,GradCamWrapper,LossSurface
 from dataset import TrainerDataLoaders, UnlearnCelebA, SampleCelebA
+
+
+from celeba_dataset import UnlearnCelebADataset
+from torchvision.models import resnet18
 
 import logging
 import sys
-
 from torch.utils.tensorboard import SummaryWriter
+import pickle
+
 tr = sys.modules[__name__]
 
 # to track all the losses and other parameters. start with loss and accuracy.
@@ -261,6 +266,15 @@ def _call_if_vanila_verbose(func):
         else:
             return None
     return wrapper
+
+def _call_if_verbose(func):
+    def wrapper(self, *args, **kwargs):
+        if self.verbose and (self.epoch) % self.log_freq == 0:
+            return func(self, *args, **kwargs)
+        else:
+            return None
+    return wrapper
+    
     
 class Trainer:
     def __init__(self,model: nn.Module, dataloaders: TrainerDataLoaders,trainer_args: TrainerSettings):
@@ -297,13 +311,16 @@ class Trainer:
         self.writer = SummaryWriter(self.log_path + f"/runs/{self.name}")
         self.log_freq = trainer_args.log_freq
 
-            
-            
-    def load_from_checkpoint(self, path):
-        #make it class method later.
-        trainer = self.__class__(copy.deepcopy(self.model), self.dataloaders, self.trainer_args)
-        trainer.load(path)
-        return trainer
+
+        model = resnet18(num_classes=8).to(self.device)
+        #model.load_state_dict(torch.load("models/model_scratch_42_resnet18.pt",map_location=device)["model_state_dict"])
+        model.load_state_dict(torch.load("models/model_unl.pt",map_location=self.device)["model_state_dict"])
+        retain_dataset = UnlearnCelebADataset("retain",1024)
+        retain_loader = DataLoader(retain_dataset,batch_size=512,shuffle=True,num_workers=4,pin_memory=True)
+        self.loss_surface = LossSurface(model,retain_loader,self.device)
+        self.loss_surface.compile(10, 24)
+        self.ax = self.loss_surface.plot()
+
 
     def train(self, epochs: int):
         progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch+1))#, disable=not self.verbose
@@ -313,14 +330,20 @@ class Trainer:
             self.train_epoch()
             self.test_epoch()
             self.epoch_logging(epoch,progress_bar)
+
+            self.loss_surface.plot_single_point(self.ax,self.model)
+
+
             if self.metrics.val.best_accuracy <= self.metrics.val.accuracy.avg:
                 self.metrics.val.best_accuracy = self.metrics.val.accuracy.avg
                 self.best_model = self.model.state_dict()
-                self.save(self.model_dir+f"/model_{self.name}.pt")     
+                self.save(self.model_dir+f"/model_{self.name}.pt")    
+
             #self.model.load_state_dict(self.best_model)
             self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
             self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
         
+            self.ax.figure.savefig(self.log_path+f"/loss_surface_{self.name}.png")
         return self.model
     
 
@@ -328,8 +351,6 @@ class Trainer:
         self.model.train()
         self.metrics.train.reset() 
         
-        #self.masked_metrics.train.reset()
-        #self.unmasked_metrics.train.reset()
         for batch_id, batch_data in enumerate(self.train_loader):
             inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
             outputs = self.model(inputs) #targets 
@@ -343,22 +364,15 @@ class Trainer:
             self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
             ###################
         self.scheduler.step()
-        """
-        if self.epoch % 10 == 0:
-            test_model(self.model,self.test_dataloader,self.device,f"test",self.logger) #test_dataloader
-        """
+
     
     @_call_if_vanila_verbose
     def test_epoch(self):
         self.metrics.val.reset() 
-        #self.masked_metrics.val.reset()
-        #self.unmasked_metrics.val.reset()
         self.test(self.val_loader, split="val")
 
         if self.test_loader is not None: 
             self.metrics.test.reset() 
-            #self.masked_metrics.test.reset()
-            #self.unmasked_metrics.test.reset()
             self.test(self.test_loader,split="test")
         self.debug_epoch()
 
@@ -370,14 +384,10 @@ class Trainer:
             with torch.no_grad():
                 inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
                 outputs = self.model(inputs)
-                """
-                if batch_id ==0:
-                    self.logger.info(f"test Outputs : {outputs}")
-                """
                 loss = self.loss_fn(outputs, targets)
             self.batch_logging(split,batch_id = batch_id,batch_data = batch_data,outputs=outputs,loss = loss)
             
-
+    ############### Load and Save ############################
     def load(self, path):
 
         checkpoint = torch.load(path, map_location=self.device)
@@ -389,13 +399,6 @@ class Trainer:
         self.history = checkpoint['history']
         return self.model
 
-    def _call_if_verbose(func):
-        def wrapper(self, *args, **kwargs):
-            if self.verbose and (self.epoch) % self.log_freq == 0:
-                return func(self, *args, **kwargs)
-            else:
-                return None
-        return wrapper
         
     def save(self, path):
         torch.save({
@@ -406,8 +409,34 @@ class Trainer:
             'loss': self.best_loss,
             'history': self.history
         }, path)
+    
+    def load_from_checkpoint(self, path):
+        trainer = self.__class__(copy.deepcopy(self.model), self.dataloaders, self.trainer_args)
+        trainer.load(path)
+        return trainer
+    
+    def reset(self):
+        def  init_weights(mod):
+            for m in mod.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.kaiming_normal_(
+                        m.weight, mode="fan_out", nonlinearity="relu")
+                elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, std=1e-3)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+    
+        #reset model weights
+        self.model.apply(init_weights)
+        self.optimizer.state = defaultdict(dict)
+        self.scheduler.state = defaultdict(dict) 
+        self.init_trainer_tracker()
 
     ############################# START Logging ########################################
+    
     @_call_if_verbose
     def batch_logging(self,split,batch_id,batch_data,outputs,loss):
         self.log_metrics(split,batch_id,batch_data,outputs,loss)
@@ -416,25 +445,25 @@ class Trainer:
         #self.random_data_snap(split,batch_id,batch_data,outputs,loss)
         #self.random_grad_cam(split,batch_id,batch_data,outputs,loss)
     
-
     @_call_if_verbose
     def epoch_logging(self,epoch,progress_bar):
         metric_dict =  {"lr": self.scheduler.get_last_lr()[0]}
-        for name,m in [("metrics",self.metrics)]: #,("masked_metrics",self.masked_metrics),("unmasked_metrics",self.unmasked_metrics)
-            for split,metrics in m.items():
-                for metric_name,metric in metrics.items():
-                    if  metric_name =="cm": 
-                        metrics.cm.plot(filename=os.path.join(self.log_path,f"{name}_{split}_cm_{self.epoch}.png"))
-                        continue
-                    metric_dict[f"{name}_{split}_{metric_name}"] = metric.avg
-                    metric_dict[f"{name}_{split}_count"] = metric.count
-                    if metric_name == "loss": self.best_loss = min(self.best_loss,metric.avg)
-                    elif split=="val" and metric_name == "accuracy" and metric.avg >= self.best_accuracy: 
-                        self.best_accuracy = metric.avg
-                        self.best_model = self.model.state_dict()
+        for split,metrics in self.metrics.items():
+            for metric_name,metric in metrics.items():
+                if  metric_name =="cm": 
+                    metrics.cm.plot(filename=os.path.join(self.log_path,f"{split}_cm_{self.epoch}.png"))
+                    continue
+                metric_dict[f"{split}_{metric_name}"] = metric.avg
+                metric_dict[f"{split}_count"] = metric.count
+                if metric_name == "loss": self.best_loss = min(self.best_loss,metric.avg)
+                elif split=="val" and metric_name == "accuracy" and metric.avg >= self.best_accuracy: 
+                    self.best_accuracy = metric.avg
+                    self.best_model = self.model.state_dict()
         self.logger.info(f"Epoch {epoch} logging : {metric_dict}")
         self.log(epoch,metric_dict,progress_bar)
 
+    
+    
     @_call_if_verbose
     def log(self, epoch, logs,progress_bar=None):                    
         def group(x): return x.split("_")[-1]
@@ -462,82 +491,21 @@ class Trainer:
     def log_metrics(self,split,batch_id,batch_data,outputs,loss):
         inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
         softmax = nn.Softmax(dim=1)
-        if len(batch_data) == 3: mask = batch_data[2].to(self.device)
         for metric_name,metric_fn in self.metrics[split].items():
             if metric_name == "loss":
                 metric_fn.update(loss.item(), inputs.size(0))
-                #self.masked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
-                #self.unmasked_metrics[split][metric_name].update(loss.item(), inputs.size(0))
-
             elif metric_name == "accuracy":
                 metric_fn.update(self.accuracy(outputs, targets), inputs.size(0))
-                #self.masked_metrics[split][metric_name].update(self.accuracy(outputs[mask], targets[mask]), mask.sum())
-                #self.unmasked_metrics[split][metric_name].update(self.accuracy(outputs[torch.where(mask,False,True)], targets[torch.where(mask,False,True)]), torch.where(mask,False,True).sum())
             elif metric_name == "cm":
                 metric_fn.update(torch.argmax(outputs, dim=-1), targets)
-                #self.masked_metrics[split][metric_name].update(torch.argmax(outputs[mask], dim=-1), targets[mask])
-                #self.unmasked_metrics[split][metric_name].update(torch.argmax(outputs[torch.where(mask,False,True)], dim=-1), targets[torch.where(mask,False,True)])
             else:
                 metric_fn.update(torch.max(softmax(outputs),dim=-1).values,targets)
-                #self.masked_metrics[split][metric_name].update(torch.max(softmax(outputs[mask]),dim=-1).values,targets[mask])
-                #self.unmasked_metrics[split][metric_name].update(torch.max(softmax(outputs[torch.where(mask,False,True)]),dim=-1).values,targets[torch.where(mask,False,True)])
 
     @_call_if_verbose
     def log_gradients(self,split):
         for name, param in self.model.named_parameters():
             self.writer.add_histogram(f"{split}.{name}.grad", param.grad, self.epoch)
 
-
-    @_call_if_verbose
-    def debug_epoch(self):
-        """"Modify this function to log whatever you want to log in a debug epoch
-        few things you can log:
-        1. incorrect predictions
-        3. activations
-        4. weights
-        5. train,test,valid datasnapshots
-        6. MIA related stuff
-        """
-        """
-        self.model.eval()
-        debug_data = defaultdict(list)
-
-        # log correct and incorrect predictions with images and targets
-
-        # debug_predictions = torch.arange(inputs.size(0))
-        # debug_predictions =  (torch.argmax(probs,dim=1) != targets).nonzero().squeeze().detach() +batch_idx # only if we want to log incorrect predictions
-        # debug_data["incorrect_predictions"].append((batch_idx*inputs.size(0) + debug_predictions).detach())
-        # debug_data["targets"].append(targets[debug_predictions].detach())
-        # debug_data["probs"].append(probs[debug_predictions].detach())
-
-        log_path = os.path.join(Config.LOG_PATH,self.name)
-        if not os.path.exists(log_path):
-            os.makedirs(log_path)
-        torch.save({ name : torch.cat(each_tensors,dim=0) for name,each_tensors in debug_data.items()}, os.path.join(log_path, f"debug_predictions_{debug_id}.pt"))
-
-        #make thhem histogram class later.
-        if self.test_loader is not None:
-            #rewrite this one
-            criterion = nn.CrossEntropyLoss(reduction="none")
-            all_losses, all_confidence = [], []
-            all_loaders = [self.train_loader,self.val_loader]
-            if self.test_loader is not None: all_loaders+=[self.test_loader] 
-            for loader in  all_loaders:
-                batch_data = next(iter(loader))
-                inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
-                logits = self.model(inputs)
-                all_losses.append(criterion(logits, targets))
-                all_confidence.append(torch.softmax(logits, dim=1).max(dim=1)[0])
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-            plot_losses(ax1, all_losses[0].flatten().detach().cpu(), all_losses[1].flatten(
-            ).detach().cpu(), all_losses[2].flatten().detach().cpu())
-            plot_losses(ax2, all_confidence[0].flatten().detach().cpu(), all_confidence[1].flatten(
-            ).detach().cpu(), all_confidence[2].flatten().detach().cpu(), name="Confidence")    
-            fig.savefig(os.path.join(self.log_path,f"{self.name}_losses_{self.epoch}.png"))
-            plt.close()
-        """
-        return
 
     ############################# END Logging ########################################
 
@@ -550,27 +518,6 @@ class Trainer:
         self.test_epoch()
         return self.metrics["val"]["accuracy"].avg
     
-    def reset(self):
-        def  init_weights(mod):
-            for m in mod.modules():
-                if isinstance(m, nn.Conv2d):
-                    nn.init.kaiming_normal_(
-                        m.weight, mode="fan_out", nonlinearity="relu")
-                elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
-                    nn.init.constant_(m.weight, 1)
-                    nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.Linear):
-                    nn.init.normal_(m.weight, std=1e-3)
-                    if m.bias is not None:
-                        nn.init.constant_(m.bias, 0)
-    
-        #reset model weights
-        self.model.apply(init_weights)
-        #reset optimizer and scheduler
-        self.optimizer.state = defaultdict(dict)
-        self.scheduler.state = defaultdict(dict) 
-        self.init_trainer_tracker()
-
 
     def init_trainer_tracker(self):
         self.history = defaultdict(list)
@@ -579,8 +526,7 @@ class Trainer:
         self.best_loss = np.inf
         self.best_model = self.model.state_dict()
         self.metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
-        #self.masked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
-        #self.unmasked_metrics = TrainerMetrics(self.device,self.num_classes,test=self.test_loader is not None)
+
 
 
 class NNTrainer(Trainer):
@@ -648,7 +594,6 @@ class AdverserialTrainer(Trainer):
         self.teacher_model = copy.deepcopy(self.model)
         self.teacher_model.eval()
         self.adv_loss = nn.KLDivLoss(reduction="batchmean")
-
         
         #from the paper
         self.alpha = 0.1 

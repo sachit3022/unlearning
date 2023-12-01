@@ -17,7 +17,7 @@ import math
 import trainer as tr
 from trainer import Trainer,  TrainerSettings, count_parameters
 from dataset import create_injection_dataloaders,create_dataloaders_missing_class,create_dataloaders_uniform_sampling,get_finetune_dataloaders,create_celeba_dataloaders,create_celeba_id_dataloaders
-from score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
+from evaluation.score import compute_unlearning_metrics,compute_retrain_unlearning_metrics, compute_acc_metrics # 2 types of unleaning metrics
 
 
 

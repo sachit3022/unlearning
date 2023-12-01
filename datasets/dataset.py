@@ -464,6 +464,10 @@ def create_cifar10_dataloaders(config):
 
 def get_finetune_dataloaders(dataloaders : TrainerDataLoaders):
     return TrainerDataLoaders(**{"train": dataloaders.retain, "retain": dataloaders.retain, "forget": dataloaders.forget, "val": dataloaders.val, "test": dataloaders.test})
+def get_scratch_datatloaders(dataloaders : TrainerDataLoaders):
+    return TrainerDataLoaders(**{"train": dataloaders.retain, "retain": dataloaders.retain, "forget": dataloaders.forget, "val": dataloaders.val, "test": dataloaders.test})
+
+
 
 def create_celeba_dataloaders(config,scratch=False):
 
