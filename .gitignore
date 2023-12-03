@@ -1,4 +1,5 @@
 data
+output
 models
 results
 experiments
@@ -7,3 +8,8 @@ logs
 **/__pycache__
 *.pth
 lst-eo
+runs
+notes
+tests
+.env
+.venv
