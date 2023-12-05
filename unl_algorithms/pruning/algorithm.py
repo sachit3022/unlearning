@@ -27,4 +27,3 @@ def unlearn(
         device=device
     )
     return model_unlearn
-    

@@ -1,11 +1,11 @@
-from torch import nn
 from dataclasses import dataclass
-from .utils import seed_everything, get_cosine_schedule_with_warmup
-from torchvision import transforms as T
-from .datasets.cifar import get_cifar10_dataloaders
 from copy import deepcopy
-from .model import resnet18_to_masked_model
+import torch
 from torch import nn, optim
+
+from .datasets.cifar import get_cifar10_dataloaders
+from .model import resnet18_to_masked_model
+from .utils import seed_everything, get_cosine_schedule_with_warmup
 from .trainer import train_with_pruning
 
 
@@ -23,7 +23,7 @@ class BaseCIFARConfig:
     init_lr = 1e-4
     weight_decay = 1e-4
     
-    num_workers = 8
+    num_workers = 4
     batch_size = 256
     
     reset_mask_after_pruning = False
@@ -75,7 +75,6 @@ def unlearn_pipeline_cifar(
         device=config.device,
         reset_mask_after_pruning=config.reset_mask_after_pruning,
     )
-    
     
     return model_unlearn
     
