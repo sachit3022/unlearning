@@ -48,6 +48,7 @@ def unlearn_pipeline_cifar(
     # model
     model_unlearn = deepcopy(model_orig)
     model_unlearn = resnet18_to_masked_model(model_unlearn)
+    model_unlearn = model_unlearn.to(device)
     
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(

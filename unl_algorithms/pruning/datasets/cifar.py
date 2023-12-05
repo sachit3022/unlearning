@@ -18,7 +18,7 @@ def get_cifar10_dataloaders(
         T.Normalize(CIFAR_MEAN, CIFAR_STD),
     ])
     
-    data_train = CIFAR10(root=data_root, train=True, transform=train_transforms)
+    data_train = CIFAR10(root=data_root, train=True, transform=train_transforms, download=True)
     
     # forget, retain
     forget_idx = np.load(forget_idx_path)
@@ -35,7 +35,7 @@ def get_cifar10_dataloaders(
         T.ToTensor(),
         T.Normalize(CIFAR_MEAN, CIFAR_STD)
     ])
-    data_test = CIFAR10(root="../../data", train=False, transform=test_transforms)
+    data_test = CIFAR10(root="../../data", train=False, transform=test_transforms, download=True)
     
     dataloaders = dict()
     dataloaders["forget"] = DataLoader(data_forget, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=True, persistent_workers=True)

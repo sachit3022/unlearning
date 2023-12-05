@@ -53,7 +53,7 @@ def train_step(batch, model, optimizer, criterion, device): # retain only
     loss.backward()
     optimizer.step()
 
-    pred = out.detech().argmax(1)
+    pred = out.detach().argmax(1)
     correct = pred.eq(label).sum()
     
     return loss.detach().item(), correct.item()
@@ -96,12 +96,12 @@ def train_with_pruning(
                 
             if is_forget_step:
                 # compute prune mask on forget, then disable mask computation
-                prune_step(batch, model)
+                prune_step(batch, model, device)
             else:
                 # finetune step on retain
-                loss, correct = train_step(batch, optimizer, model)
-                running_loss += loss.item()
-                running_correct += correct.item()
+                loss, correct = train_step(batch, model, optimizer, criterion, device)
+                running_loss += loss
+                running_correct += correct
                 
                 if scheduler_type == "on_step":
                     scheduler.step()
@@ -111,8 +111,8 @@ def train_with_pruning(
         retain_acc = running_correct / len(dataloaders["retain"].dataset)
         retain_loss = running_loss / len(dataloaders["retain"])
           
-        test_acc, test_loss = evaluate(dataloaders["test"], model)
-        forget_acc, forget_loss = evaluate(dataloaders["forget"], model)
+        test_acc, test_loss = evaluate(model, dataloaders["test"], criterion, device)
+        forget_acc, forget_loss = evaluate(model, dataloaders["forget"],criterion, device)
         
         print(f"Epoch: {epoch} | retain_loss: {retain_loss:6.4f} | retain_acc: {retain_acc:6.4f} | forget_loss: {forget_loss:6.4f} | forget_acc: {forget_acc:6.4f} | test_loss: {test_loss:6.4f} | test_acc: {test_acc:6.4f} | lr: {optimizer.param_groups[0]['lr']:6.4e}")
     
@@ -122,17 +122,17 @@ def train_with_pruning(
         running_correct = 0
         
         for batch_retain in dataloaders["retain"]:
-            loss, correct = train_step(batch_retain, optimizer, model)
-            running_loss += loss.item()
-            running_correct += correct.item()
+            loss, correct = train_step(batch_retain, model, optimizer, criterion, device)
+            running_loss += loss
+            running_correct += correct
         
         scheduler.step()
           
         retain_acc = running_correct / len(dataloaders["retain"].dataset)
         retain_loss = running_loss / len(dataloaders["retain"])
           
-        test_acc, test_loss = evaluate(dataloaders["test"], model)
-        forget_acc, forget_loss = evaluate(dataloaders["forget"], model)
+        test_acc, test_loss = evaluate(model,dataloaders["test"], criterion, device)
+        forget_acc, forget_loss = evaluate(model,dataloaders["forget"], criterion, device)
         print(f"Epoch: {epoch} | retain_loss: {retain_loss:6.4f} | retain_acc: {retain_acc:6.4f} | forget_loss: {forget_loss:6.4f} | forget_acc: {forget_acc:6.4f} | test_loss: {test_loss:6.4f} | test_acc: {test_acc:6.4f} | lr: {optimizer.param_groups[0]['lr']:6.4e}")
     
     n_p = 0
