@@ -6,7 +6,7 @@ from torch import nn, optim
 from .datasets.cifar import get_cifar10_dataloaders
 from .model import resnet18_to_masked_model
 from .utils import seed_everything, get_cosine_schedule_with_warmup
-from .trainer import train_with_pruning
+from .trainer import train_with_pruning, train_with_prune_once
 
 
 @dataclass
@@ -20,13 +20,14 @@ class BaseCIFARConfig:
     data_root = "/research/hal-datastore/datasets/processed/Unlearning/CIFAR-10"
     forget_idx_path = "/research/hal-datastore/datasets/processed/Unlearning/CIFAR-10/forget_idx.npy"
     batch_size = 256
-    init_lr = 1e-4
-    weight_decay = 1e-4
+    init_lr = 1e-3
+    weight_decay = 1e-3
     
     num_workers = 4
     batch_size = 256
     
     reset_mask_after_pruning = False
+    use_scheduler = True
 
 def unlearn_pipeline_cifar(
     model_orig: nn.Module,
@@ -57,12 +58,17 @@ def unlearn_pipeline_cifar(
         weight_decay=config.weight_decay,
     )
     
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=0,
-        num_training_steps=max_epochs * len(dataloaders["retain"])
-    )
-    scheduler_type = "step"
+    n_scheduler_steps = (1 + max_epochs) * len(dataloaders["retain"])
+    print(f"{n_scheduler_steps=}")
+    if config.use_scheduler:
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=0,
+            num_training_steps=n_scheduler_steps
+        )
+    else:
+        scheduler = None
+    scheduler_type = "on_step"
     
     train_with_pruning(
         prune_epochs=config.prune_epochs,
@@ -78,7 +84,6 @@ def unlearn_pipeline_cifar(
     )
     
     return model_unlearn
-    
     
     
     

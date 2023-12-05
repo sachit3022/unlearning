@@ -69,7 +69,8 @@ def train_with_pruning(
     scheduler,
     scheduler_type: str,
     device,
-    reset_mask_after_pruning: bool = False
+    reset_mask_after_pruning: bool = False,
+    alternating: bool = False,
 ) -> None:
     def prune_epoch(epoch):
         model.train()
@@ -97,17 +98,18 @@ def train_with_pruning(
             if is_forget_step:
                 # compute prune mask on forget, then disable mask computation
                 prune_step(batch, model, device)
-            else:
+            else:   
                 # finetune step on retain
                 loss, correct = train_step(batch, model, optimizer, criterion, device)
                 running_loss += loss
                 running_correct += correct
                 
-                if scheduler_type == "on_step":
+                if scheduler_type == "on_step" and scheduler is not None:
                     scheduler.step()
         
-        if scheduler_type == "on_epoch":
+        if scheduler_type == "on_epoch" and scheduler is not None:
             scheduler.step()
+            
         retain_acc = running_correct / len(dataloaders["retain"].dataset)
         retain_loss = running_loss / len(dataloaders["retain"])
           
@@ -125,8 +127,11 @@ def train_with_pruning(
             loss, correct = train_step(batch_retain, model, optimizer, criterion, device)
             running_loss += loss
             running_correct += correct
-        
-        scheduler.step()
+            
+            if scheduler_type == "on_step" and scheduler is not None:
+                    scheduler.step()
+        if scheduler_type == "on_epoch" and scheduler is not None:
+            scheduler.step()
           
         retain_acc = running_correct / len(dataloaders["retain"].dataset)
         retain_loss = running_loss / len(dataloaders["retain"])
@@ -135,13 +140,79 @@ def train_with_pruning(
         forget_acc, forget_loss = evaluate(model,dataloaders["forget"], criterion, device)
         print(f"Epoch: {epoch} | retain_loss: {retain_loss:6.4f} | retain_acc: {retain_acc:6.4f} | forget_loss: {forget_loss:6.4f} | forget_acc: {forget_acc:6.4f} | test_loss: {test_loss:6.4f} | test_acc: {test_acc:6.4f} | lr: {optimizer.param_groups[0]['lr']:6.4e}")
     
-    n_p = 0
-    for epoch in range(total_epochs):
-        if epoch % 2 == 0 and n_p < prune_epochs:
-            prune_epoch(epoch)
-            n_p += 1
-        else:
-            finetune_epoch(epoch)
+    if alternating:
+        n_p = 0
+        for epoch in range(total_epochs):
+            if epoch % 2 == 0 and n_p < prune_epochs:
+                prune_epoch(epoch)
+                n_p += 1
+            else:
+                if n_p >= prune_epochs:
+                    if reset_mask_after_pruning:
+                        print(f"Remove prune masks at epoch {epoch}")
+                        reset_pruning(model) # clear out masks
+                finetune_epoch(epoch)
+    else:
+        n_p = 0
+        for epoch in range(total_epochs):
+            if n_p < prune_epochs:
+                prune_epoch(epoch)
+                n_p += 1
+            else:
+                if reset_mask_after_pruning:
+                    print(f"Remove prune masks at epoch {epoch}")
+                    reset_pruning(model) # clear out masks
+                finetune_epoch(epoch)
             
-            if reset_mask_after_pruning:
-                reset_pruning(model) # clear out masks
+            
+def train_with_prune_once(
+    prune_epochs: int,
+    total_epochs: int,
+    dataloaders,
+    model,
+    optimizer,
+    criterion,
+    scheduler,
+    scheduler_type: str,
+    device,
+    reset_mask_after_pruning: bool = False,
+    
+) -> None:
+    
+    n_p = 0
+            
+    model.train()
+    running_loss = 0.0
+    running_correct = 0
+    
+    for epoch in range(total_epochs):
+        if n_p < prune_epochs:
+            with torch.no_grad():
+                for batch_forget in dataloaders["forget"]:
+                    prune_step(batch_forget, model, device)
+            n_p += 1
+            
+        if reset_mask_after_pruning:
+            if epoch == total_epochs - 1:
+                print(f"Remove prune masks at epoch {epoch}")
+                reset_pruning(model)
+                
+        for batch_retain in dataloaders["retain"]:
+            loss, correct = train_step(batch_retain, model, optimizer, criterion, device)
+            running_loss += loss
+            running_correct += correct
+            
+            if scheduler_type == "on_step":
+                    scheduler.step()
+        if scheduler_type == "on_epoch":
+            scheduler.step()
+            
+        retain_acc = running_correct / len(dataloaders["retain"].dataset)
+        retain_loss = running_loss / len(dataloaders["retain"])
+            
+        test_acc, test_loss = evaluate(model,dataloaders["test"], criterion, device)
+        forget_acc, forget_loss = evaluate(model,dataloaders["forget"], criterion, device)
+        print(f"Epoch: {epoch} | retain_loss: {retain_loss:6.4f} | retain_acc: {retain_acc:6.4f} | forget_loss: {forget_loss:6.4f} | forget_acc: {forget_acc:6.4f} | test_loss: {test_loss:6.4f} | test_acc: {test_acc:6.4f} | lr: {optimizer.param_groups[0]['lr']:6.4e}")
+
+        
+    
