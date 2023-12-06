@@ -108,14 +108,14 @@ def get_args(parser):
     # convert relative to absolute paths
 
     # set working dir
-    current_time = strftime("%m-%d_0", gmtime())
+    current_time = strftime("%m-%d_000", gmtime())
     args.output_dir = os.path.join(
-        'experiments', args.experiment + "_" + current_time)
+        'experiments', args.experiment + f"_{current_time}")
     if os.path.isdir(args.output_dir):
         while True:
-            cur_exp_number = int(args.output_dir[-2:].replace('_', ""))
+            cur_exp_number = int(args.output_dir[-4:].replace('_', ""))
             args.output_dir = args.output_dir[:-
-                                              2] + "_{}".format(cur_exp_number+1)
+                                              4] + "_{:03d}".format(cur_exp_number+1)
             if not os.path.isdir(args.output_dir):
                 break
     os.makedirs(args.output_dir)

@@ -10,9 +10,19 @@ from torchvision import transforms
 from torchvision.datasets import CelebA
 import torch
 from torch.utils.data import Dataset
-from utils import load_example
 from celeba_dataset import UnlearnCelebADataset
-
+# Helper functions for loading the hidden dataset.
+def load_example(image,image_id,age_group,age,person_id):
+    #age and age group are the same for now and they are indicative of the label class.
+    
+    result = {
+        'image': image.to(torch.float32),
+        'image_id': image_id,
+        'age_group': age_group,
+        'age': age,
+        'person_id':person_id
+    }
+    return (image.to(torch.float32),age_group)
 
 
 def _load_csv(filename, header=None):
@@ -39,17 +49,14 @@ def make_retain_forget_dataset():
     df = pd.merge(identity,attr,on="img_id")
     df = pd.merge(df,split,on="img_id")
    
-    df["class_label"] = df.apply(lambda x:int(str((x["Male"]+1)//2)+str((x["Gray_Hair"]+1)//2),2),axis=1) #+str((x["Chubby"]+1)//2)
+    df["class_label"] = df.apply(lambda x:int(str((x["Male"]+1)//2)+str((x["Gray_Hair"]+1)//2)+str((x["Chubby"]+1)//2),2),axis=1)
     #sample 2% of the dataset
-    new_df = df.loc[ (df["class_label"]==0) | (df["class_label"]==2)  ].sample(frac=0.02)
-    new_df = new_df[new_df["split"]==0]
+    new_df = df[df["split"]==0].sample(frac=0.02).loc[ (df["class_label"]==0) | (df["class_label"]==4)  ]
     df.loc[df["split"]==0,"split"]= df.apply(lambda x: 4 if x["img_id"] in new_df["img_id"].values else 3,axis=1)[df["split"]==0]
     df[["img_id","split"]].to_csv("data/celeba/list_unlearn_eval_partition.txt",sep=" ",index=False,header=False)
 
 def plot_label_distribution(dataset,prefix="train"):
-    labels = []
-    for i in range(len(dataset)):
-        labels.append(dataset[i][1])#'age_group'
+    labels = [dataset[i][1] for i in range(len(dataset))]
     labels = np.array(labels)
     unique, counts = np.unique(labels, return_counts=True)
     
@@ -147,11 +154,11 @@ def compress_images(root):
 
 if __name__ == "__main__":
 
-    compress_images("data/celeba")
+    #compress_images("data/celeba")
     make_retain_forget_dataset()
 
     ##### Plot class label distribution #########
-    """
+  
     for split in ["train","forget","retain","valid", "test"]:
         print(f"Plotting {split} class label distribution")
         dataset = UnlearnCelebADataset(split=split)
@@ -162,4 +169,4 @@ if __name__ == "__main__":
     class_sample_count = torch.tensor([class_weights[i] for i in range(len(class_weights))])
     weight = 1. / class_sample_count
     print(weight)
-    """
+

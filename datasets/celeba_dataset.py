@@ -7,7 +7,7 @@ import numpy as np
 from torchvision.datasets.utils import verify_str_arg
 from torch.utils.data.sampler import WeightedRandomSampler,RandomSampler
 import logging
-from utils import load_example
+from datasets.utils import load_example
 
 
 
@@ -22,7 +22,7 @@ class UnlearnCelebADataset(Dataset):
             ]
         )
         self.examples= UnlearnCelebA(root="data",split=split, transform=self.transforms)
-        make_class_label = lambda labels : int("".join(map(lambda x : str(x.item()) , (labels[[20,17]] + 1)//2)),2) #13
+        make_class_label = lambda labels : int("".join(map(lambda x : str(x.item()) , (labels[[20,17,13]] + 1)//2)),2) #13
         self.example_class_label = np.apply_along_axis(func1d=make_class_label,axis=1,arr=self.examples.attr.numpy())
 
         if balanced:
@@ -47,7 +47,7 @@ class UnlearnCelebADataset(Dataset):
         class_label = self.example_class_label[idx].item()
         person_id = self.examples.identity[idx].item()
         example = load_example(image,idx,class_label,class_label,person_id)
-        return (example[0],example[1],self.examples.splits[idx][0]==3)
+        return (example[0],example[1])#self.examples.splits[idx][0]==3)
 
 
 class UnlearnCelebA(CelebA):
@@ -123,12 +123,11 @@ def get_dataloader(config,split,balanced=False):
         sampler = WeightedRandomSampler(ds.example_weight, len(ds.example_weight))
     else:
         sampler = RandomSampler(ds) 
-    loader = DataLoader(ds, batch_size=config.BATCH_SIZE,num_workers=config.num_workers, pin_memory=True,sampler=sampler,persistent_workers=True)
+    loader = DataLoader(ds, batch_size=config.data.BATCH_SIZE,num_workers=config.data.num_workers, pin_memory=False,sampler=sampler,persistent_workers=True)
     return loader
 
 
-
-def get_dataset(config,balanced=False):
+def get_celeba_dataloaders(config,balanced=False):
     '''Get the dataset.'''
     
     train_loader = get_dataloader(config,"train",balanced=balanced)
@@ -139,7 +138,16 @@ def get_dataset(config,balanced=False):
 
     return train_loader,retain_loader, forget_loader, valid_loader,test_loader
 
+def get_celeba_datasets(config,balanced=False):
+    '''Get the dataset.'''
+    
+    train_ds = UnlearnCelebADataset(split="train",balanced=balanced)
+    retain_ds = UnlearnCelebADataset(split="retain",balanced=balanced)
+    forget_ds = UnlearnCelebADataset(split="forget",balanced=balanced)
+    valid_ds = UnlearnCelebADataset(split="valid",balanced=balanced)
+    test_ds = UnlearnCelebADataset(split="test",balanced=balanced)
 
+    return train_ds,retain_ds, forget_ds, valid_ds,test_ds
 
     
 

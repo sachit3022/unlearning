@@ -1,7 +1,6 @@
 BASE_DIR : "unlearning"
-DEVICE : 'cuda:0'
+DEVICE : 'cpu'
 SEED : 42
-BATCH_SIZE : 1024
 DATA_PATH: 'data'
 MODEL_DIR: 'models'
 
@@ -12,62 +11,63 @@ directory:
 
 data:
   num_workers: 6
-  rf_split: [0.1, 0.9]
-  num_classes: 4
+  num_classes: 8
+  BATCH_SIZE : 512
 
 model:
   name: 'resnet18'
   model_args:
     num_classes: 8
+  checkpoint: 'neurips-submission/model_base_celeba.pt'
 
 trainer :
-  verbose: False
-  train: True
+  verbose: True
+  train: False
   
-  log_freq: 10
-  epochs: 50
   
+  log_freq: 1
+  epochs: 40
   optimizer: 
     type: 'AdamW'
-    lr: 0.003
-    weight_decay: 0.00001
+    lr: 0.0003
+    weight_decay: 1
     betas: [0.9, 0.999]
 
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 50
+    T_max: 40
 
 scratch_trainer :
-  verbose: False
-  train: True
+  verbose: True
+  train: False
   
-  log_freq: 10
-  epochs: 50
+  log_freq:  1
+  epochs: 0
   
   optimizer: 
     type: 'AdamW'
-    lr: 0.003
-    weight_decay: 0.00001
+    lr: 0.0003
+    weight_decay: 1
     betas: [0.9, 0.999]
 
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 50
+    T_max: 40
 
 
 finetune:
-  verbose: False
+  verbose: True
   train: True
   
   log_freq: 1
-  epochs: 5
+  epochs: 4
   
   optimizer: 
     type: 'AdamW'
-    lr: 0.003
-    weight_decay: 0.00001
+    lr: 0.0003
+    weight_decay: 1
     betas: [0.9, 0.999]
 
   scheduler: 
     type: 'CosineAnnealingLR'
-    T_max: 5
+    T_max: 4

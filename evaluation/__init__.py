@@ -1,1 +1,1 @@
-from SVC_MIA import SVC_MIA,collect_prob
+from .SVC_MIA import SVC_MIA

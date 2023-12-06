@@ -19,7 +19,6 @@ import pandas as pd
 import torch
 from PIL import Image
 from tqdm import tqdm
-from plots import plot_image_grid
 from torchvision.datasets import CelebA   
 from copy import deepcopy
 from typing import Union
