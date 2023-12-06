@@ -15,21 +15,27 @@ import torch
 from torch import nn 
 from torch import optim
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts
 
-from torch.utils.data import DataLoader, Subset
-from torchmetrics import  ConfusionMatrix
-from plots import plot_losses,plot_image_grid,plot_confusion_matrix,GradCamWrapper,LossSurface
-from dataset import TrainerDataLoaders, UnlearnCelebA, SampleCelebA
-
-
-from celeba_dataset import UnlearnCelebADataset
-from torchvision.models import resnet18
 
 import logging
 import sys
 from torch.utils.tensorboard import SummaryWriter
-import pickle
+from torchmetrics import  ConfusionMatrix
+from torchmetrics.classification import MulticlassF1Score
+
+import time
+
+from plots import plot_losses,plot_image_grid,plot_confusion_matrix,GradCamWrapper,LossSurface
+from datasets import TrainerDataLoaders, UnlearnCelebADataset
+
+
+
+from torchvision.models import resnet18
+
+
+
 
 tr = sys.modules[__name__]
 
@@ -39,9 +45,9 @@ class AverageMeter:
         self.reset()
 
     def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
+        self.val = 0.0
+        self.avg = 0.0
+        self.sum = 0.0
         self.count = 0
 
     def update(self, val, n=1):
@@ -114,11 +120,6 @@ class PrecesionFRR(AverageMeter):
     def __init__(self,num_classes=2) -> None:
         self.fpr = 0.1
     def update(self,inputs,outputs):
-        #compute the precision at a given fpr with true and predicted probabilities
-        #step 1 calucualte the theshold for the given fpr
-        #step 2 calculate the precision and recall
-        #step 3 update the average meter
-        #write a binary search for thereshold with max iters 10
         start_theshold,end_theshold = 0,1
         for _ in range(10):
 
@@ -190,10 +191,9 @@ class Metrics(dict):
     #if you want to add more metrics, add them here and it should have update and reset methods
     def __init__(self,device,num_classes):
         self.device = device
-        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),} #"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device) #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#"pfpr": PrecesionFRR()
+        self.metrics =  {"loss":AverageMeter(), "accuracy":AverageMeter(),"f1":MulticlassF1Score(task="multiclass", num_classes=num_classes,average="macro").to(device) } #"cm" :  SingleConfusionMatrix(task="multiclass",num_classes=num_classes).to(device) #MultiConfusionMatrix(task='binary',num_heads=40,num_classes=2).to(device) }#"pfpr": PrecesionFRR()
         self.best_accuracy = 0
         self.best_loss = np.inf
-
         for m in self.metrics.keys():
             setattr(self, m, self.metrics[m])
             
@@ -275,6 +275,8 @@ def _call_if_verbose(func):
             return None
     return wrapper
     
+
+
     
 class Trainer:
     def __init__(self,model: nn.Module, dataloaders: TrainerDataLoaders,trainer_args: TrainerSettings):
@@ -311,29 +313,24 @@ class Trainer:
         self.writer = SummaryWriter(self.log_path + f"/runs/{self.name}")
         self.log_freq = trainer_args.log_freq
 
-
-        model = resnet18(num_classes=8).to(self.device)
-        #model.load_state_dict(torch.load("models/model_scratch_42_resnet18.pt",map_location=device)["model_state_dict"])
-        model.load_state_dict(torch.load("models/model_unl.pt",map_location=self.device)["model_state_dict"])
-        retain_dataset = UnlearnCelebADataset("retain",1024)
-        retain_loader = DataLoader(retain_dataset,batch_size=512,shuffle=True,num_workers=4,pin_memory=True)
-        self.loss_surface = LossSurface(model,retain_loader,self.device)
-        self.loss_surface.compile(10, 24)
-        self.ax = self.loss_surface.plot()
-
-
     def train(self, epochs: int):
+        
         progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch+1))#, disable=not self.verbose
-      
+        start_time = time.time()
         for epoch in progress_bar:
+
             self.epoch = epoch
+            epoch_time = time.time()
+            
+
+            train_epoch_time = time.time()
             self.train_epoch()
+            self.logger.info(f"Train epoch time taken : {time.time()-train_epoch_time}")
+            test_epoch_time = time.time()
             self.test_epoch()
+            self.logger.info(f"Test epoch time taken : {time.time()-test_epoch_time}")
+            logging_time = time.time()
             self.epoch_logging(epoch,progress_bar)
-
-            self.loss_surface.plot_single_point(self.ax,self.model)
-
-
             if self.metrics.val.best_accuracy <= self.metrics.val.accuracy.avg:
                 self.metrics.val.best_accuracy = self.metrics.val.accuracy.avg
                 self.best_model = self.model.state_dict()
@@ -342,8 +339,11 @@ class Trainer:
             #self.model.load_state_dict(self.best_model)
             self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
             self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
-        
-            self.ax.figure.savefig(self.log_path+f"/loss_surface_{self.name}.png")
+            self.logger.info(f"Epoch time taken : {time.time()-epoch_time}")
+            self.logger.info(f"Logging time taken : {time.time()-logging_time}")
+
+
+        self.logger.info(f"Total time taken : {time.time()-start_time}")
         return self.model
     
 
@@ -374,8 +374,6 @@ class Trainer:
         if self.test_loader is not None: 
             self.metrics.test.reset() 
             self.test(self.test_loader,split="test")
-        self.debug_epoch()
-
 
     
     def test(self, loader: DataLoader,split="test"):
@@ -453,12 +451,18 @@ class Trainer:
                 if  metric_name =="cm": 
                     metrics.cm.plot(filename=os.path.join(self.log_path,f"{split}_cm_{self.epoch}.png"))
                     continue
-                metric_dict[f"{split}_{metric_name}"] = metric.avg
-                metric_dict[f"{split}_count"] = metric.count
-                if metric_name == "loss": self.best_loss = min(self.best_loss,metric.avg)
-                elif split=="val" and metric_name == "accuracy" and metric.avg >= self.best_accuracy: 
+                elif metric_name in[ "accuracy","loss"]:
+                    metric_dict[f"{split}_{metric_name}"] = metric.avg
+                    metric_dict[f"{split}_count"] = metric.count
+                else:
+                    metric_dict[f"{split}_{metric_name}"] = metric.compute().item()
+
+                if split=="val" and metric_name == "loss": 
+                    self.best_loss = min(self.best_loss,metric.avg)
+                if split=="val" and metric_name == "accuracy" and metric.avg >= self.best_accuracy: 
                     self.best_accuracy = metric.avg
                     self.best_model = self.model.state_dict()
+                
         self.logger.info(f"Epoch {epoch} logging : {metric_dict}")
         self.log(epoch,metric_dict,progress_bar)
 
@@ -469,8 +473,7 @@ class Trainer:
         def group(x): return x.split("_")[-1]
         for key, value in logs.items():
             self.history[key].append(value)
-            if self.verbose:
-                self.writer.add_scalar(f"{group(key)}/{key}", value, epoch)
+            self.writer.add_scalar(f"{group(key)}/{key}", value, epoch)
         if progress_bar is not None: progress_bar.set_postfix(**logs)
         
     
@@ -499,7 +502,8 @@ class Trainer:
             elif metric_name == "cm":
                 metric_fn.update(torch.argmax(outputs, dim=-1), targets)
             else:
-                metric_fn.update(torch.max(softmax(outputs),dim=-1).values,targets)
+
+                metric_fn.update(F.softmax(outputs,dim=-1),targets)
 
     @_call_if_verbose
     def log_gradients(self,split):
@@ -510,7 +514,7 @@ class Trainer:
     ############################# END Logging ########################################
 
     def accuracy(self, outputs, targets):
-        _, preds = torch.max(outputs, dim=-1)
+        preds = torch.argmax(outputs, dim=-1)
         return  (preds == targets).float().mean().item()
 
     def cross_validation_score(self, epochs=100):
@@ -536,26 +540,27 @@ class NNTrainer(Trainer):
         self.hook_features = None
         self.og_model = copy.deepcopy(self.model)
         self.hook_handle = self.setup_hook()
-
+        self.nn_optim = copy.deepcopy(self.optimizer)
+        
     def setup_hook(self):
         def forward_hook_fn(module, inputs, outputs):
             self.hook_features = outputs
         handle = self.og_model.fc.register_forward_hook(forward_hook_fn)
         return handle
     
-    def train_epoch(self):
+    def nn_epoch(self):
 
         self.model.train()       
-        forget_iter = iter(self.dataloaders.forget)
-        for batch_id, batch_data in enumerate(self.dataloaders.retain):
-            inputs_retrain, targets_retrain  = batch_data[0].to(self.device), batch_data[1].to(self.device)
+        retain_iter = iter(self.dataloaders.retain)
+        for batch_id, batch_data in enumerate(self.dataloaders.forget):
+            inputs_forget, targets_forget  = batch_data[0].to(self.device), batch_data[1].to(self.device)
             try:
-                batch_data_forget = next(forget_iter)
+                batch_data_retain = next(retain_iter)
             except StopIteration:
-                forget_iter = iter(self.dataloaders.forget)
-                batch_data_forget = next(forget_iter)
+                retain_iter = iter(self.dataloaders.forget)
+                batch_data_retain = next(retain_iter)
             
-            inputs_forget, targets_forget  = batch_data_forget[0].to(self.device), batch_data_forget[1].to(self.device)
+            inputs_retrain, targets_retrain = batch_data_retain[0].to(self.device), batch_data_retain[1].to(self.device)
             inputs = torch.cat([inputs_retrain,inputs_forget],dim=0)
             targets = torch.cat([targets_retrain,targets_forget],dim=0)
             retain_mask_og = torch.cat([torch.ones_like(targets_retrain),torch.zeros_like(targets_forget)],dim=0)
@@ -575,16 +580,49 @@ class NNTrainer(Trainer):
             
             loss = self.loss_fn(outputs, targets_onehot) 
 
-            self.optimizer.zero_grad()      
+            self.nn_optim.zero_grad()      
             loss.backward()
+            self.nn_optim.step()
 
-            #### LOGGING ######
-            self.batch_logging(split = "train",batch_id = batch_id,batch_data = batch_data,outputs=outputs[retain_mask_og==1],loss = loss)
-            ###################
-            
-            self.optimizer.step()
 
-        self.scheduler.step()
+    def train(self, epochs: int):
+        
+        progress_bar = tqdm(range(self.epoch+1, epochs+self.epoch-1))#, disable=not self.verbose
+        start_time = time.time()
+
+        for i in range(20):
+            self.nn_epoch()
+        
+        self.dataloaders.train = self.dataloaders.retain
+        self.train_loader = self.dataloaders.retain
+
+        for epoch in progress_bar:
+
+            self.epoch = epoch
+            epoch_time = time.time()
+
+            train_epoch_time = time.time()
+            self.train_epoch()
+            self.logger.info(f"Train epoch time taken : {time.time()-train_epoch_time}")
+            test_epoch_time = time.time()
+            self.test_epoch()
+            self.logger.info(f"Test epoch time taken : {time.time()-test_epoch_time}")
+            logging_time = time.time()
+            self.epoch_logging(epoch,progress_bar)
+            if self.metrics.val.best_accuracy <= self.metrics.val.accuracy.avg:
+                self.metrics.val.best_accuracy = self.metrics.val.accuracy.avg
+                self.best_model = self.model.state_dict()
+                self.save(self.model_dir+f"/model_{self.name}.pt")    
+
+            #self.model.load_state_dict(self.best_model)
+            self.logger.info(f"Best model accuracy: {self.metrics.val.best_accuracy}")
+            self.logger.info(f"Best model is saved @ : {self.model_dir}/model_{self.name}.pt")
+            self.logger.info(f"Epoch time taken : {time.time()-epoch_time}")
+            self.logger.info(f"Logging time taken : {time.time()-logging_time}")
+
+
+        self.logger.info(f"Total time taken : {time.time()-start_time}")
+        return self.model
 
 
 class AdverserialTrainer(Trainer):
@@ -633,4 +671,71 @@ class AdverserialTrainer(Trainer):
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+
+
+
+
+class RLFTrainer(NNTrainer):
+    def __init__(self, model: nn.Module, dataloaders: TrainerDataLoaders, trainer_args: TrainerSettings):
+        super().__init__(model, dataloaders, trainer_args)
+        self.model = copy.deepcopy(self.model)
+
+
+    def nn_epoch(self):
+        self.model.train()
+        self.dataloaders.train = self.dataloaders.retain
+        for batch_id, batch_data in enumerate(self.dataloaders.forget):
+            inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
+            targets = targets[torch.randperm(targets.size()[0])]
+            outputs = self.model(inputs)
+            loss = self.loss_fn(outputs,targets)
+            self.nn_optim.zero_grad()
+            loss.backward()
+            self.nn_optim.step()
+  
+
+def discretize(x):
+    return torch.round(x * 255) / 255
+
+class BoundaryUnlearning(NNTrainer):
+    def __init__(self, model: nn.Module, dataloaders: TrainerDataLoaders, trainer_args: TrainerSettings):
+        super().__init__(model, dataloaders, trainer_args)
+        self.eps = 0.1
+        self.nn_optimizer = copy.deepcopy(self.optimizer)
+    
+    def FGSM_perturb(self,x, y, model=None, bound=None, criterion=None):
+        device = model.parameters().__next__().device
+        model.zero_grad()
+        x_adv = x.detach().clone().requires_grad_(True).to(device)
+
+        pred = model(x_adv)
+        loss = criterion(pred, y)
+        loss.backward()
+
+        grad_sign = x_adv.grad.data.detach().sign()
+        x_adv = x_adv + grad_sign * bound
+        x_adv = discretize(torch.clamp(x_adv, 0.0, 1.0))
+
+        return x_adv.detach()
+
+    def nn_epoch(self):
+        self.dataloaders.train = self.dataloaders.retain
+        #gradients to inputs
+        self.model.train()
+        for batch_id, batch_data in enumerate(self.dataloaders.forget):
+            inputs, targets = batch_data[0].to(self.device), batch_data[1].to(self.device)
+
+            mod_inputs = self.FGSM_perturb(inputs,targets,self.model,self.eps,self.loss_fn)
+            new_targets = torch.argmax(self.model(mod_inputs).detach(), dim=1)
+
+            outputs = self.model(inputs)
+            loss = self.loss_fn(outputs,new_targets)
+
+            self.nn_optimizer.zero_grad()
+            loss.backward()
+            self.nn_optimizer.step()
+        
+
+
+
 

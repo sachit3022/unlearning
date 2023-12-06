@@ -1,0 +1,72 @@
+BASE_DIR : "unlearning"
+DEVICE : 'cpu'
+SEED : 42
+DATA_PATH: 'data'
+MODEL_DIR: 'models'
+
+directory:
+  RESULT_PATH: 'results'
+  LOG_PATH: 'logs'
+  LOGGER_PATH: 'logger.log'
+
+data:
+  num_workers: 6
+  num_classes: 10
+  BATCH_SIZE : 512
+
+model:
+  name: 'resnet18'
+  checkpoint: 'neurips-submission/model_base_cifar.pt'
+  model_args:
+    num_classes: 10
+
+trainer :
+  verbose: True
+  train: False
+
+  log_freq: 1
+  epochs: 100
+  optimizer: 
+    type: 'AdamW'
+    lr: 0.001
+    weight_decay: 0.005
+    betas: [0.9, 0.999]
+
+  scheduler: 
+    type: 'CosineAnnealingLR'
+    T_max: 100
+
+scratch_trainer :
+  verbose: True
+  train: False
+  
+  log_freq:  1
+  epochs: 100
+  
+  optimizer: 
+    type: 'AdamW'
+    lr: 0.001
+    weight_decay: 0.005
+    betas: [0.9, 0.999]
+
+  scheduler: 
+    type: 'CosineAnnealingLR'
+    T_max: 100
+
+
+finetune:
+  verbose: True
+  train: True
+  
+  log_freq: 1
+  epochs: 10
+  
+  optimizer: 
+    type: 'AdamW'
+    lr: 0.001
+    weight_decay: 0.005
+    betas: [0.9, 0.999]
+
+  scheduler: 
+    type: 'CosineAnnealingLR'
+    T_max: 10

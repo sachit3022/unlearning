@@ -13,7 +13,7 @@ import cv2
 irange = range
 from torchvision.models import resnet18
 from torch.utils.data import DataLoader,Subset
-from celeba_dataset import UnlearnCelebADataset
+from datasets import UnlearnCelebADataset
 from evaluation.SVC_MIA import collect_prob,entropy
 import seaborn as sns
 import pickle
@@ -278,6 +278,16 @@ class Coordinates:
         return 
 
 
+def plot_loss_surface(device):
+    model = resnet18(num_classes=8).to(device)
+    #model.load_state_dict(torch.load("models/model_scratch_42_resnet18.pt",map_location=device)["model_state_dict"])
+    model.load_state_dict(torch.load("models/model_unl.pt",map_location=device)["model_state_dict"])
+    retain_dataset = UnlearnCelebADataset("retain",1024)
+    retain_loader = DataLoader(retain_dataset,batch_size=512,shuffle=True,num_workers=4,pin_memory=True)
+    loss_surface = LossSurface(model,retain_loader,device)
+    loss_surface.compile(10, 24)
+    ax = loss_surface.plot()
+    pickle.dump(ax, open('loss_surface.pickle', 'w'))
 
 
 if __name__ == "__main__":
@@ -295,33 +305,3 @@ if __name__ == "__main__":
     ax.figure.savefig("loss_surface.png")
     ax.figure.clf()
     pickle.dump(loss_surface,open("loss_surface.pkl","wb"),protocol=pickle.HIGHEST_PROTOCOL)
-
-
-    """
-    train_dataset = UnlearnCelebADataset("train")
-    retain_dataset = UnlearnCelebADataset("retain")
-    forget_dataset = UnlearnCelebADataset("forget")
-    valid_dataset = UnlearnCelebADataset("valid")
-    test_dataset = UnlearnCelebADataset("test")
-
-    retain_loader_train = DataLoader(Subset(train_dataset,range(0,len(test_dataset))),batch_size=512,shuffle=True,num_workers=4,pin_memory=True)
-    forget_loader = DataLoader(forget_dataset,batch_size=512,shuffle=True,num_workers=4,pin_memory=True)
-    test_loader = DataLoader(test_dataset,batch_size=512,shuffle=True,num_workers=4,pin_memory=True)
-    
-    shadow_train_prob, shadow_train_labels = collect_prob(retain_loader_train, model,device)
-    shadow_test_prob, shadow_test_labels = collect_prob(test_loader, model,device)
-    target_test_prob, target_test_labels = collect_prob(forget_loader, model,device)
-
-    shadow_train_conf = entropy(shadow_train_prob).flatten().detach().cpu().numpy()
-    shadow_test_conf = entropy(shadow_test_prob).flatten().detach().cpu().numpy()
-    target_test_conf = entropy(target_test_prob).flatten().detach().cpu().numpy()
-
-    #shadow_train_conf = torch.gather(shadow_train_prob, 1, shadow_train_labels[:, None]).flatten().detach().cpu().numpy()
-    #shadow_test_conf = torch.gather(shadow_test_prob, 1, shadow_test_labels[:, None]).flatten().detach().cpu().numpy()
-    #target_test_conf = torch.gather(target_test_prob, 1, target_test_labels[:, None]).flatten().detach().cpu().numpy()
-
-    fig,ax = plt.subplots()
-    plot_losses(ax, shadow_test_conf, target_test_conf, shadow_train_conf, name="Entropy")
-    fig.savefig("Entropy.png")
-    fig.clf()
-    """
